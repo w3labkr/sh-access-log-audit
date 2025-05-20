@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# ... (스크립트 상단은 동일) ...
+
 LOG_FILE="access.log"
 REPORT_FILE="audit_report.txt"
 PATTERNS=(
@@ -94,7 +96,9 @@ total_log_lines_matched_overall=0
 threat_type_summary_data=""
 ip_summary_data=""
 daily_summary_data=""
+url_summary_data_raw=""
 top_ips_for_summary=""
+top_urls_for_summary_raw="" # 이 변수는 Top 10 URL과 count를 탭으로 구분하여 각 라인에 저장
 
 unique_threat_types_in_order=()
 temp_seen_types_str=""
@@ -147,6 +151,31 @@ if [ -f "$TEMP_MATCHED_LOGS" ] && [ -s "$TEMP_MATCHED_LOGS" ]; then
 
     extracted_dates_raw=$(grep -o -E "$DATE_REGEX" "$TEMP_MATCHED_LOGS" | sed -E 's/^\[//' | sort | uniq -c | awk '{print $2 "=" $1}')
     for item in $extracted_dates_raw; do daily_summary_data="${daily_summary_data}${item};"; done
+
+    # extracted_urls_raw_counts는 "URL\tcount" 형태로 각 라인에 저장됨
+    extracted_urls_raw_counts=$(awk -F'"' '{
+        if (NF >= 2 && $2 ~ /^(GET|POST|PUT|DELETE|HEAD|OPTIONS|PATCH) /) {
+            split($2, request_parts, " ");
+            if (request_parts[2] != "") {
+                print request_parts[2];
+            }
+        }
+    }' "$TEMP_MATCHED_LOGS" | sort | uniq -c | awk '{$1=$1; printf "%s\t%s\n", $2, $1}') # 각 라인이 "URL\tcount"
+
+    current_url_summary_for_sorting=""
+    # base64 인코딩된 URL과 count를 탭으로 구분하여 임시 변수에 저장 (정렬용)
+    while IFS=$'\t' read -r url_path count; do
+        if [ -n "$url_path" ] && [ -n "$count" ]; then
+            encoded_url_path=$(echo -n "$url_path" | base64)
+            current_url_summary_for_sorting="${current_url_summary_for_sorting}${encoded_url_path}\t${count}\n"
+        fi
+    done <<< "$extracted_urls_raw_counts"
+    
+    # top_urls_for_summary_raw는 "base64encodedURL\tcount" 형태로 각 라인에 저장됨 (Top 10)
+    # printf로 끝에 개행이 붙은 current_url_summary_for_sorting을 처리하고, sort 후 awk로 다시 합침
+    if [ -n "$current_url_summary_for_sorting" ]; then
+        top_urls_for_summary_raw=$(printf "%b" "$current_url_summary_for_sorting" | sort -t$'\t' -k2nr | head -n 10)
+    fi
 fi
 
 if [ "$found_any_threat" = true ]; then
@@ -188,6 +217,27 @@ if [ "$found_any_threat" = true ]; then
         echo "$ip_summary_data" | tr ';' '\n' | grep . | awk -F'=' '{print $2 " " $1}' | sort -nr | awk '{printf "  - %-15s : %s 건\n", $2, $1}' >> "$REPORT_FILE"
         IFS="$OLD_IFS_IP"; echo "" >> "$REPORT_FILE"
     fi
+
+    # URL별 탐지 현황 리포트 작성 (top_urls_for_summary_raw 사용)
+    if [ -n "$top_urls_for_summary_raw" ]; then
+        echo "----------------------------------------" >> "$REPORT_FILE"
+        echo "URL별 탐지 현황 (Top 10, 의심 로그 발생 횟수)" >> "$REPORT_FILE"
+        echo "----------------------------------------" >> "$REPORT_FILE"
+        # top_urls_for_summary_raw는 이미 "base64encodedURL\tcount" 형태로 Top 10 정렬되어 있음
+        # 각 라인을 읽어서 처리
+        while IFS=$'\t' read -r encoded_url_str count_str; do
+            if [ -n "$encoded_url_str" ] && [ -n "$count_str" ]; then
+                decoded_url_str_base64=$(echo "$encoded_url_str" | base64 -d 2>/dev/null)
+                if [ $? -eq 0 ] && [ -n "$decoded_url_str_base64" ]; then
+                    final_url_str=$(url_decode "$decoded_url_str_base64")
+                    printf "  - %s : %s 건\n" "$final_url_str" "$count_str" >> "$REPORT_FILE"
+                else
+                    printf "  - %s (decoding_failed) : %s 건\n" "$encoded_url_str" "$count_str" >> "$REPORT_FILE"
+                fi
+            fi
+        done <<< "$top_urls_for_summary_raw" # Here String으로 top_urls_for_summary_raw의 각 라인을 루프에 전달
+        echo "" >> "$REPORT_FILE"
+    fi
 fi
 echo "========================================" >> "$REPORT_FILE"
 
@@ -224,11 +274,44 @@ else
 
     if [ -n "$top_ips_for_summary" ]; then
         echo "--- IP 주소별 탐지 현황 (Top 10) ---"
+        # top_ips_for_summary는 "IP=count" 형태의 문자열임, 각 라인이 아님
+        # 이전 로직 유지 또는 top_ips_for_summary 생성 방식을 top_urls_for_summary_raw와 유사하게 변경 필요
+        # 현재 로직은 top_ips_for_summary가 각 라인별로 IP=count 정보를 담고 있다고 가정하고 처리함
+        # 만약 top_ips_for_summary가 "ip1=c1 ip2=c2" 형태라면 아래 루프 수정 필요
+        # 현재는 echo "$top_ips_for_summary" | while ... 로 한 줄씩 처리하는 것으로 가정
         echo "$top_ips_for_summary" | while IFS="=" read -r ip count; do
             if [ -n "$ip" ] && [ -n "$count" ]; then
                  printf "  - %-15s : %s 건\n" "$ip" "$count"
             fi
         done
+    fi
+
+    # URL별 탐지 현황 요약 출력 (수정)
+    if [ -n "$top_urls_for_summary_raw" ]; then
+        echo "--- URL별 탐지 현황 (Top 10, 건수 기준) ---"
+        # top_urls_for_summary_raw는 "base64encodedURL\tcount" 형태로 각 라인에 저장되어 있음
+        # Here String을 사용하여 while 루프가 현재 쉘에서 실행되도록 함
+        while IFS=$'\t' read -r encoded_url count; do
+            if [ -n "$encoded_url" ] && [ -n "$count" ]; then
+                decoded_url_base64=$(echo "$encoded_url" | base64 -d 2>/dev/null)
+                 if [ $? -eq 0 ] && [ -n "$decoded_url_base64" ]; then
+                    final_decoded_url=$(url_decode "$decoded_url_base64")
+                    if [ ${#final_decoded_url} -gt 70 ]; then
+                        display_url="${final_decoded_url:0:67}..."
+                    else
+                        display_url="$final_decoded_url"
+                    fi
+                    printf "  - %s : %s 건\n" "$display_url" "$count"
+                else
+                    if [ ${#encoded_url} -gt 70 ]; then
+                        display_url="${encoded_url:0:67}..."
+                    else
+                        display_url="$encoded_url"
+                    fi
+                    printf "  - %s (decoding_failed) : %s 건\n" "$display_url" "$count"
+                fi
+            fi
+        done <<< "$top_urls_for_summary_raw" # Here String 사용
     fi
 
     echo "========================="
