@@ -4,6 +4,7 @@
 DEFAULT_LOG_FILE="access.log"
 DEFAULT_REPORT_FILE="report.txt"
 DEFAULT_SUMMARY_FILE="summary.txt"
+DEFAULT_BLACKLIST_FILE="blacklist.txt" # 블랙리스트 파일 기본 이름
 DEFAULT_TOP_N_DATE=10
 DEFAULT_TOP_N_IP=10
 DEFAULT_TOP_N_URL=10
@@ -13,6 +14,7 @@ DEFAULT_TOP_N_REFERER=10
 LOG_FILE="$DEFAULT_LOG_FILE"
 REPORT_FILE="$DEFAULT_REPORT_FILE"
 SUMMARY_FILE="$DEFAULT_SUMMARY_FILE"
+BLACKLIST_FILE="$DEFAULT_BLACKLIST_FILE" # 블랙리스트 파일 변수
 TOP_N_DATE="$DEFAULT_TOP_N_DATE"
 TOP_N_IP="$DEFAULT_TOP_N_IP"
 TOP_N_URL="$DEFAULT_TOP_N_URL"
@@ -25,6 +27,7 @@ usage() {
     echo "  --file LOG_FILE, -f LOG_FILE         분석할 로그 파일 경로 (기본값: $DEFAULT_LOG_FILE)"
     echo "  --report-file REPORT_FILE            상세 리포트 파일 이름 (기본값: $DEFAULT_REPORT_FILE)"
     echo "  --summary-file SUMMARY_FILE          요약 리포트 파일 이름 (기본값: $DEFAULT_SUMMARY_FILE)"
+    echo "  --blacklist-file BLACKLIST_FILE      IP 블랙리스트 파일 이름 (기본값: $DEFAULT_BLACKLIST_FILE)" # 블랙리스트 파일 옵션 추가
     echo "  --top-date TOP_N_DATE                일별 탐지 현황 표시 개수 (기본값: $DEFAULT_TOP_N_DATE)"
     echo "  --top-ip TOP_N_IP                  IP 주소별 탐지 현황 표시 개수 (기본값: $DEFAULT_TOP_N_IP)"
     echo "  --top-url TOP_N_URL                URL별 탐지 현황 표시 개수 (기본값: $DEFAULT_TOP_N_URL)"
@@ -43,6 +46,8 @@ while [[ $# -gt 0 ]]; do
             if [[ -n "$2" && "$2" != -* ]]; then REPORT_FILE="$2"; shift 2; else echo "오류: --report-file 옵션에는 파일 이름이 필요합니다." >&2; usage; fi ;;
         --summary-file)
             if [[ -n "$2" && "$2" != -* ]]; then SUMMARY_FILE="$2"; shift 2; else echo "오류: --summary-file 옵션에는 파일 이름이 필요합니다." >&2; usage; fi ;;
+        --blacklist-file) # 블랙리스트 파일 옵션 처리
+            if [[ -n "$2" && "$2" != -* ]]; then BLACKLIST_FILE="$2"; shift 2; else echo "오류: --blacklist-file 옵션에는 파일 이름이 필요합니다." >&2; usage; fi ;;
         --top-date)
             if [[ -n "$2" && "$2" != -* ]]; then TOP_N_DATE="$2"; shift 2; else echo "오류: --top-date 옵션에는 숫자가 필요합니다." >&2; usage; fi ;;
         --top-ip)
@@ -83,7 +88,7 @@ PATTERNS=(
     "XSS:.*<iframe\b[^>]*\b(src|srcdoc)\s*=\s*[^>]*javascript:[^>]+>"
     "XSS:.*(alert\(|confirm\(|prompt\(|document\.cookie|document\.write\(|window\.location)"
     "XSS:.*(expression\(|eval\(|setTimeout\(|setInterval\()"
-    "XSS_ENCODED:.*(%3Cscript|%3Cimg|%3Csvg|%253Cscript|<script|<script)" # 수정: <script 중복 제거 및 HTML 엔티티 추가
+    "XSS_ENCODED:.*(%3Cscript|%3Cimg|%3Csvg|%253Cscript|<script|<script)"
     "XSS_DOM:.*(#|location\.hash\s*=).*(<script>|javascript:)"
 
     # Path Traversal / LFI (Local File Inclusion) (기존 + 보강)
@@ -236,6 +241,9 @@ fi
 # 파일 초기화
 if [ -f "$REPORT_FILE" ]; then rm "$REPORT_FILE"; fi
 if [ -f "$SUMMARY_FILE" ]; then rm "$SUMMARY_FILE"; fi
+# 블랙리스트 파일은 기존 내용을 유지하고 추가할 수도 있지만, 여기서는 매번 새로 생성하도록 함
+if [ -f "$BLACKLIST_FILE" ]; then rm "$BLACKLIST_FILE"; fi
+
 
 # 상세 리포트 파일 헤더 작성
 echo "보안 감사 리포트 (상세 로그) - $(date)" > "$REPORT_FILE"
@@ -348,7 +356,7 @@ if [ -f "$TEMP_MATCHED_LOGS" ] && [ -s "$TEMP_MATCHED_LOGS" ]; then
         top_urls_for_summary_raw=$(printf "%b" "$current_url_summary_for_sorting" | sort -t$'\t' -k2nr | head -n "$TOP_N_URL")
     fi
 
-    # Referer별 요약 (수정된 로직)
+    # Referer별 요약
     extracted_referers_raw_counts=$(awk -F'"' '{ referer_field = $(NF-3); if (NF >= 6 && referer_field != "-" && referer_field != "") print referer_field }' "$TEMP_MATCHED_LOGS" | sort | uniq -c | awk '{$1=$1; printf "%s\t%s\n", $2, $1}')
     
     current_referer_summary_for_sorting=""
@@ -493,12 +501,23 @@ else
 fi
 
 
+# 블랙리스트 파일 생성
+if [ "$found_any_threat" = true ] && [ -f "$TEMP_MATCHED_LOGS" ] && [ -s "$TEMP_MATCHED_LOGS" ]; then
+    grep -o -E "$IP_REGEX" "$TEMP_MATCHED_LOGS" | sort -u | awk '{print "- " $0}' > "$BLACKLIST_FILE"
+    echo "IP 블랙리스트 생성 완료: $BLACKLIST_FILE"
+else
+    # 위협이 탐지되지 않았거나 TEMP_MATCHED_LOGS가 비어있으면 빈 블랙리스트 파일 생성
+    > "$BLACKLIST_FILE" 
+    echo "탐지된 위협이 없어 빈 IP 블랙리스트 파일 생성: $BLACKLIST_FILE"
+fi
+
+
 # 터미널 최종 출력
 if [ "$found_any_threat" = false ]; then
     echo "탐지된 보안 위협 로그가 없습니다."
-    echo "리포트 생성 완료: $REPORT_FILE, $SUMMARY_FILE"
+    echo "리포트 생성 완료: $REPORT_FILE, $SUMMARY_FILE, $BLACKLIST_FILE"
 else
-    echo "리포트 생성 완료: $REPORT_FILE, $SUMMARY_FILE"
+    echo "리포트 생성 완료: $REPORT_FILE, $SUMMARY_FILE, $BLACKLIST_FILE"
     echo ""
     cat "$SUMMARY_FILE"
 fi
