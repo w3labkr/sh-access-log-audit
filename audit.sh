@@ -2,11 +2,12 @@
 
 # 기본값 설정
 DEFAULT_LOG_FILE="access.log"
-DEFAULT_REPORT_FILE="report.txt" # report.txt로 변경
+DEFAULT_REPORT_FILE="report.txt"
 DEFAULT_SUMMARY_FILE="summary.txt"
 DEFAULT_TOP_N_DATE=10
 DEFAULT_TOP_N_IP=10
 DEFAULT_TOP_N_URL=10
+DEFAULT_TOP_N_REFERER=10
 
 # 변수 초기화
 LOG_FILE="$DEFAULT_LOG_FILE"
@@ -15,22 +16,24 @@ SUMMARY_FILE="$DEFAULT_SUMMARY_FILE"
 TOP_N_DATE="$DEFAULT_TOP_N_DATE"
 TOP_N_IP="$DEFAULT_TOP_N_IP"
 TOP_N_URL="$DEFAULT_TOP_N_URL"
+TOP_N_REFERER="$DEFAULT_TOP_N_REFERER"
 
 # 사용법 안내 함수
 usage() {
-    echo "사용법: $0 [-f LOG_FILE] [-r REPORT_FILE] [-s SUMMARY_FILE] [-d TOP_N_DATE] [-i TOP_N_IP] [-u TOP_N_URL]"
+    echo "사용법: $0 [-f LOG_FILE] [-r REPORT_FILE] [-s SUMMARY_FILE] [-d TOP_N_DATE] [-i TOP_N_IP] [-u TOP_N_URL] [-e TOP_N_REFERER]"
     echo "  -f LOG_FILE: 분석할 로그 파일 경로 (기본값: $DEFAULT_LOG_FILE)"
     echo "  -r REPORT_FILE: 상세 리포트 파일 이름 (기본값: $DEFAULT_REPORT_FILE)"
     echo "  -s SUMMARY_FILE: 요약 리포트 파일 이름 (기본값: $DEFAULT_SUMMARY_FILE)"
     echo "  -d TOP_N_DATE: 일별 탐지 현황 표시 개수 (기본값: $DEFAULT_TOP_N_DATE)"
     echo "  -i TOP_N_IP: IP 주소별 탐지 현황 표시 개수 (기본값: $DEFAULT_TOP_N_IP)"
     echo "  -u TOP_N_URL: URL별 탐지 현황 표시 개수 (기본값: $DEFAULT_TOP_N_URL)"
+    echo "  -e TOP_N_REFERER: Referer별 탐지 현황 표시 개수 (기본값: $DEFAULT_TOP_N_REFERER)"
     echo "  -h: 이 도움말 메시지를 표시합니다."
     exit 1
 }
 
 # getopts를 사용하여 옵션 파싱
-while getopts "f:r:s:d:i:u:h" opt; do
+while getopts "f:r:s:d:i:u:e:h" opt; do
     case $opt in
         f) LOG_FILE="$OPTARG" ;;
         r) REPORT_FILE="$OPTARG" ;;
@@ -38,12 +41,13 @@ while getopts "f:r:s:d:i:u:h" opt; do
         d) TOP_N_DATE="$OPTARG" ;;
         i) TOP_N_IP="$OPTARG" ;;
         u) TOP_N_URL="$OPTARG" ;;
+        e) TOP_N_REFERER="$OPTARG" ;;
         h) usage ;;
         \?) echo "잘못된 옵션: -$OPTARG" >&2; usage ;;
         :) echo "옵션 -$OPTARG 는 인수가 필요합니다." >&2; usage ;;
     esac
 done
-shift $((OPTIND -1)) # 처리된 옵션 제거
+shift $((OPTIND -1))
 
 PATTERNS=(
     "SQL_INJECTION:.*' OR '1'='1"
@@ -142,6 +146,10 @@ if ! [[ "$TOP_N_URL" =~ ^[0-9]+$ ]]; then
     echo "오류: URL별 Top N 값(-u)은 숫자여야 합니다. 입력값: $TOP_N_URL"
     exit 1
 fi
+if ! [[ "$TOP_N_REFERER" =~ ^[0-9]+$ ]]; then
+    echo "오류: Referer별 Top N 값(-e)은 숫자여야 합니다. 입력값: $TOP_N_REFERER"
+    exit 1
+fi
 
 # 파일 초기화
 if [ -f "$REPORT_FILE" ]; then rm "$REPORT_FILE"; fi
@@ -155,6 +163,7 @@ echo "분석 대상 로그 파일: $LOG_FILE" >> "$REPORT_FILE"
 echo "일별 탐지 요약 표시 개수: $TOP_N_DATE" >> "$REPORT_FILE"
 echo "IP 주소별 탐지 요약 표시 개수: $TOP_N_IP" >> "$REPORT_FILE"
 echo "URL별 탐지 요약 표시 개수: $TOP_N_URL" >> "$REPORT_FILE"
+echo "Referer별 탐지 요약 표시 개수: $TOP_N_REFERER" >> "$REPORT_FILE"
 echo "" >> "$REPORT_FILE"
 
 # 요약 리포트 파일 헤더 작성
@@ -165,6 +174,7 @@ echo "분석 대상 로그 파일: $LOG_FILE" >> "$SUMMARY_FILE"
 echo "일별 탐지 요약 표시 개수: $TOP_N_DATE" >> "$SUMMARY_FILE"
 echo "IP 주소별 탐지 요약 표시 개수: $TOP_N_IP" >> "$SUMMARY_FILE"
 echo "URL별 탐지 요약 표시 개수: $TOP_N_URL" >> "$SUMMARY_FILE"
+echo "Referer별 탐지 요약 표시 개수: $TOP_N_REFERER" >> "$SUMMARY_FILE"
 echo "" >> "$SUMMARY_FILE"
 
 found_any_threat=false
@@ -172,9 +182,11 @@ total_log_lines_matched_overall=0
 threat_type_summary_data=""
 ip_summary_data=""
 daily_summary_data=""
+referer_summary_data_raw=""
 top_ips_for_summary=""
 top_urls_for_summary_raw=""
 top_dates_for_summary=""
+top_referers_for_summary_raw=""
 
 
 unique_threat_types_in_order=()
@@ -257,6 +269,22 @@ if [ -f "$TEMP_MATCHED_LOGS" ] && [ -s "$TEMP_MATCHED_LOGS" ]; then
     if [ -n "$current_url_summary_for_sorting" ]; then
         top_urls_for_summary_raw=$(printf "%b" "$current_url_summary_for_sorting" | sort -t$'\t' -k2nr | head -n "$TOP_N_URL")
     fi
+
+    # Referer별 요약 (수정)
+    extracted_referers_raw_counts=$(awk -F'"' '{ if (NF >= 4 && $4 != "-" && $4 != "") print $4 }' "$TEMP_MATCHED_LOGS" | sort | uniq -c | awk '{$1=$1; printf "%s\t%s\n", $2, $1}')
+    
+    current_referer_summary_for_sorting=""
+    while IFS=$'\t' read -r referer_path count; do
+        if [ -n "$referer_path" ] && [ -n "$count" ]; then
+            encoded_referer_path=$(echo -n "$referer_path" | base64)
+            current_referer_summary_for_sorting="${current_referer_summary_for_sorting}${encoded_referer_path}\t${count}\n"
+        fi
+    done <<< "$extracted_referers_raw_counts"
+
+    if [ -n "$current_referer_summary_for_sorting" ]; then
+        top_referers_for_summary_raw=$(printf "%b" "$current_referer_summary_for_sorting" | sort -t$'\t' -k2nr | head -n "$TOP_N_REFERER")
+    fi
+
 fi
 
 # 상세 리포트 파일 (audit_report.txt) 작성
@@ -352,6 +380,33 @@ if [ "$found_any_threat" = true ]; then
         done <<< "$top_urls_for_summary_raw"
         echo "" >> "$SUMMARY_FILE"
     fi
+
+    if [ -n "$top_referers_for_summary_raw" ]; then
+        echo "--- Referer별 탐지 현황 (Top $TOP_N_REFERER, 건수 기준) ---" >> "$SUMMARY_FILE"
+        while IFS=$'\t' read -r encoded_referer count; do
+            if [ -n "$encoded_referer" ] && [ -n "$count" ]; then
+                decoded_referer_base64=$(echo "$encoded_referer" | base64 -d 2>/dev/null)
+                 if [ $? -eq 0 ] && [ -n "$decoded_referer_base64" ]; then
+                    final_decoded_referer=$(url_decode "$decoded_referer_base64") # Referer도 URL 디코딩
+                    if [ ${#final_decoded_referer} -gt 70 ]; then
+                        display_referer="${final_decoded_referer:0:67}..."
+                    else
+                        display_referer="$final_decoded_referer"
+                    fi
+                    printf "  - %s : %s 건\n" "$display_referer" "$count" >> "$SUMMARY_FILE"
+                else
+                    if [ ${#encoded_referer} -gt 70 ]; then
+                        display_referer="${encoded_referer:0:67}..."
+                    else
+                        display_referer="$encoded_referer"
+                    fi
+                    printf "  - %s (decoding_failed) : %s 건\n" "$display_referer" "$count" >> "$SUMMARY_FILE"
+                fi
+            fi
+        done <<< "$top_referers_for_summary_raw"
+        echo "" >> "$SUMMARY_FILE"
+    fi
+
     echo "=========================" >> "$SUMMARY_FILE"
     echo "상세 로그는 $REPORT_FILE 파일을 확인하세요." >> "$SUMMARY_FILE"
 else
