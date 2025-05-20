@@ -20,34 +20,51 @@ TOP_N_REFERER="$DEFAULT_TOP_N_REFERER"
 
 # 사용법 안내 함수
 usage() {
-    echo "사용법: $0 [-f LOG_FILE] [-r REPORT_FILE] [-s SUMMARY_FILE] [-d TOP_N_DATE] [-i TOP_N_IP] [-u TOP_N_URL] [-e TOP_N_REFERER]"
-    echo "  -f LOG_FILE: 분석할 로그 파일 경로 (기본값: $DEFAULT_LOG_FILE)"
-    echo "  -r REPORT_FILE: 상세 리포트 파일 이름 (기본값: $DEFAULT_REPORT_FILE)"
-    echo "  -s SUMMARY_FILE: 요약 리포트 파일 이름 (기본값: $DEFAULT_SUMMARY_FILE)"
-    echo "  -d TOP_N_DATE: 일별 탐지 현황 표시 개수 (기본값: $DEFAULT_TOP_N_DATE)"
-    echo "  -i TOP_N_IP: IP 주소별 탐지 현황 표시 개수 (기본값: $DEFAULT_TOP_N_IP)"
-    echo "  -u TOP_N_URL: URL별 탐지 현황 표시 개수 (기본값: $DEFAULT_TOP_N_URL)"
-    echo "  -e TOP_N_REFERER: Referer별 탐지 현황 표시 개수 (기본값: $DEFAULT_TOP_N_REFERER)"
-    echo "  -h: 이 도움말 메시지를 표시합니다."
+    echo "사용법: $0 [옵션...]"
+    echo "옵션:"
+    echo "  --file LOG_FILE, -f LOG_FILE         분석할 로그 파일 경로 (기본값: $DEFAULT_LOG_FILE)"
+    echo "  --report-file REPORT_FILE            상세 리포트 파일 이름 (기본값: $DEFAULT_REPORT_FILE)"
+    echo "  --summary-file SUMMARY_FILE          요약 리포트 파일 이름 (기본값: $DEFAULT_SUMMARY_FILE)"
+    echo "  --top-date TOP_N_DATE                일별 탐지 현황 표시 개수 (기본값: $DEFAULT_TOP_N_DATE)"
+    echo "  --top-ip TOP_N_IP                  IP 주소별 탐지 현황 표시 개수 (기본값: $DEFAULT_TOP_N_IP)"
+    echo "  --top-url TOP_N_URL                URL별 탐지 현황 표시 개수 (기본값: $DEFAULT_TOP_N_URL)"
+    echo "  --top-referer TOP_N_REFERER        Referer별 탐지 현황 표시 개수 (기본값: $DEFAULT_TOP_N_REFERER)"
+    echo "  --help, -h                           이 도움말 메시지를 표시합니다."
     exit 1
 }
 
-# getopts를 사용하여 옵션 파싱
-while getopts "f:r:s:d:i:u:e:h" opt; do
-    case $opt in
-        f) LOG_FILE="$OPTARG" ;;
-        r) REPORT_FILE="$OPTARG" ;;
-        s) SUMMARY_FILE="$OPTARG" ;;
-        d) TOP_N_DATE="$OPTARG" ;;
-        i) TOP_N_IP="$OPTARG" ;;
-        u) TOP_N_URL="$OPTARG" ;;
-        e) TOP_N_REFERER="$OPTARG" ;;
-        h) usage ;;
-        \?) echo "잘못된 옵션: -$OPTARG" >&2; usage ;;
-        :) echo "옵션 -$OPTARG 는 인수가 필요합니다." >&2; usage ;;
+# 롱 옵션 및 일부 숏 옵션 파싱
+ARGS=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --file|-f)
+            if [[ -n "$2" && "$2" != -* ]]; then LOG_FILE="$2"; shift 2; else echo "오류: --file 또는 -f 옵션에는 파일 경로가 필요합니다." >&2; usage; fi ;;
+        --report-file)
+            if [[ -n "$2" && "$2" != -* ]]; then REPORT_FILE="$2"; shift 2; else echo "오류: --report-file 옵션에는 파일 이름이 필요합니다." >&2; usage; fi ;;
+        --summary-file)
+            if [[ -n "$2" && "$2" != -* ]]; then SUMMARY_FILE="$2"; shift 2; else echo "오류: --summary-file 옵션에는 파일 이름이 필요합니다." >&2; usage; fi ;;
+        --top-date)
+            if [[ -n "$2" && "$2" != -* ]]; then TOP_N_DATE="$2"; shift 2; else echo "오류: --top-date 옵션에는 숫자가 필요합니다." >&2; usage; fi ;;
+        --top-ip)
+            if [[ -n "$2" && "$2" != -* ]]; then TOP_N_IP="$2"; shift 2; else echo "오류: --top-ip 옵션에는 숫자가 필요합니다." >&2; usage; fi ;;
+        --top-url)
+            if [[ -n "$2" && "$2" != -* ]]; then TOP_N_URL="$2"; shift 2; else echo "오류: --top-url 옵션에는 숫자가 필요합니다." >&2; usage; fi ;;
+        --top-referer)
+            if [[ -n "$2" && "$2" != -* ]]; then TOP_N_REFERER="$2"; shift 2; else echo "오류: --top-referer 옵션에는 숫자가 필요합니다." >&2; usage; fi ;;
+        --help|-h)
+            usage ;;
+        *) # 알 수 없는 옵션 또는 인자
+            ARGS+=("$1")
+            shift
+            ;;
     esac
 done
-shift $((OPTIND -1))
+
+if [ ${#ARGS[@]} -ne 0 ]; then
+    echo "알 수 없는 인자 또는 잘못된 옵션 사용: ${ARGS[*]}"
+    usage
+fi
+
 
 PATTERNS=(
     "SQL_INJECTION:.*' OR '1'='1"
@@ -132,23 +149,23 @@ get_threat_description() {
 # 입력값 유효성 검사
 if [ ! -f "$LOG_FILE" ]; then
     echo "오류: 로그 파일 '$LOG_FILE'을(를) 찾을 수 없습니다."
-    exit 1
+    usage
 fi
 if ! [[ "$TOP_N_DATE" =~ ^[0-9]+$ ]]; then
-    echo "오류: 일별 Top N 값(-d)은 숫자여야 합니다. 입력값: $TOP_N_DATE"
-    exit 1
+    echo "오류: 일별 Top N 값(--top-date)은 숫자여야 합니다. 입력값: $TOP_N_DATE"
+    usage
 fi
 if ! [[ "$TOP_N_IP" =~ ^[0-9]+$ ]]; then
-    echo "오류: IP별 Top N 값(-i)은 숫자여야 합니다. 입력값: $TOP_N_IP"
-    exit 1
+    echo "오류: IP별 Top N 값(--top-ip)은 숫자여야 합니다. 입력값: $TOP_N_IP"
+    usage
 fi
 if ! [[ "$TOP_N_URL" =~ ^[0-9]+$ ]]; then
-    echo "오류: URL별 Top N 값(-u)은 숫자여야 합니다. 입력값: $TOP_N_URL"
-    exit 1
+    echo "오류: URL별 Top N 값(--top-url)은 숫자여야 합니다. 입력값: $TOP_N_URL"
+    usage
 fi
 if ! [[ "$TOP_N_REFERER" =~ ^[0-9]+$ ]]; then
-    echo "오류: Referer별 Top N 값(-e)은 숫자여야 합니다. 입력값: $TOP_N_REFERER"
-    exit 1
+    echo "오류: Referer별 Top N 값(--top-referer)은 숫자여야 합니다. 입력값: $TOP_N_REFERER"
+    usage
 fi
 
 # 파일 초기화
@@ -160,10 +177,6 @@ echo "보안 감사 리포트 (상세 로그) - $(date)" > "$REPORT_FILE"
 echo "========================================" >> "$REPORT_FILE"
 echo "" >> "$REPORT_FILE"
 echo "분석 대상 로그 파일: $LOG_FILE" >> "$REPORT_FILE"
-echo "일별 탐지 요약 표시 개수: $TOP_N_DATE" >> "$REPORT_FILE"
-echo "IP 주소별 탐지 요약 표시 개수: $TOP_N_IP" >> "$REPORT_FILE"
-echo "URL별 탐지 요약 표시 개수: $TOP_N_URL" >> "$REPORT_FILE"
-echo "Referer별 탐지 요약 표시 개수: $TOP_N_REFERER" >> "$REPORT_FILE"
 echo "" >> "$REPORT_FILE"
 
 # 요약 리포트 파일 헤더 작성
@@ -270,7 +283,7 @@ if [ -f "$TEMP_MATCHED_LOGS" ] && [ -s "$TEMP_MATCHED_LOGS" ]; then
         top_urls_for_summary_raw=$(printf "%b" "$current_url_summary_for_sorting" | sort -t$'\t' -k2nr | head -n "$TOP_N_URL")
     fi
 
-    # Referer별 요약 (수정)
+    # Referer별 요약
     extracted_referers_raw_counts=$(awk -F'"' '{ if (NF >= 4 && $4 != "-" && $4 != "") print $4 }' "$TEMP_MATCHED_LOGS" | sort | uniq -c | awk '{$1=$1; printf "%s\t%s\n", $2, $1}')
     
     current_referer_summary_for_sorting=""
@@ -336,7 +349,7 @@ if [ "$found_any_threat" = true ]; then
     echo "" >> "$SUMMARY_FILE"
 
     if [ -n "$top_dates_for_summary" ]; then
-        echo "--- 일별 탐지 현황 (Top $TOP_N_DATE, 건수 기준) ---" >> "$SUMMARY_FILE"
+        echo "--- 일별 탐지 현황 (Top $TOP_N_DATE) ---" >> "$SUMMARY_FILE"
         while IFS="=" read -r date count; do
             if [ -n "$date" ] && [ -n "$count" ]; then
                  printf "  - %-15s : %s 건\n" "$date" "$count" >> "$SUMMARY_FILE"
@@ -356,7 +369,7 @@ if [ "$found_any_threat" = true ]; then
     fi
 
     if [ -n "$top_urls_for_summary_raw" ]; then
-        echo "--- URL별 탐지 현황 (Top $TOP_N_URL, 건수 기준) ---" >> "$SUMMARY_FILE"
+        echo "--- URL별 탐지 현황 (Top $TOP_N_URL) ---" >> "$SUMMARY_FILE"
         while IFS=$'\t' read -r encoded_url count; do
             if [ -n "$encoded_url" ] && [ -n "$count" ]; then
                 decoded_url_base64=$(echo "$encoded_url" | base64 -d 2>/dev/null)
@@ -382,12 +395,12 @@ if [ "$found_any_threat" = true ]; then
     fi
 
     if [ -n "$top_referers_for_summary_raw" ]; then
-        echo "--- Referer별 탐지 현황 (Top $TOP_N_REFERER, 건수 기준) ---" >> "$SUMMARY_FILE"
+        echo "--- Referer별 탐지 현황 (Top $TOP_N_REFERER) ---" >> "$SUMMARY_FILE"
         while IFS=$'\t' read -r encoded_referer count; do
             if [ -n "$encoded_referer" ] && [ -n "$count" ]; then
                 decoded_referer_base64=$(echo "$encoded_referer" | base64 -d 2>/dev/null)
                  if [ $? -eq 0 ] && [ -n "$decoded_referer_base64" ]; then
-                    final_decoded_referer=$(url_decode "$decoded_referer_base64") # Referer도 URL 디코딩
+                    final_decoded_referer=$(url_decode "$decoded_referer_base64")
                     if [ ${#final_decoded_referer} -gt 70 ]; then
                         display_referer="${final_decoded_referer:0:67}..."
                     else
