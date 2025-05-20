@@ -1,10 +1,49 @@
 #!/bin/bash
 
-# 로그 파일 경로 처리 (기본값: access.log)
-LOG_FILE="${1:-access.log}" # 첫 번째 인자가 없으면 "access.log" 사용
+# 기본값 설정
+DEFAULT_LOG_FILE="access.log"
+DEFAULT_REPORT_FILE="report.txt" # report.txt로 변경
+DEFAULT_SUMMARY_FILE="summary.txt"
+DEFAULT_TOP_N_DATE=10
+DEFAULT_TOP_N_IP=10
+DEFAULT_TOP_N_URL=10
 
-REPORT_FILE="audit_report.txt"
-SUMMARY_FILE="summary.txt" # 요약 정보를 저장할 파일
+# 변수 초기화
+LOG_FILE="$DEFAULT_LOG_FILE"
+REPORT_FILE="$DEFAULT_REPORT_FILE"
+SUMMARY_FILE="$DEFAULT_SUMMARY_FILE"
+TOP_N_DATE="$DEFAULT_TOP_N_DATE"
+TOP_N_IP="$DEFAULT_TOP_N_IP"
+TOP_N_URL="$DEFAULT_TOP_N_URL"
+
+# 사용법 안내 함수
+usage() {
+    echo "사용법: $0 [-f LOG_FILE] [-r REPORT_FILE] [-s SUMMARY_FILE] [-d TOP_N_DATE] [-i TOP_N_IP] [-u TOP_N_URL]"
+    echo "  -f LOG_FILE: 분석할 로그 파일 경로 (기본값: $DEFAULT_LOG_FILE)"
+    echo "  -r REPORT_FILE: 상세 리포트 파일 이름 (기본값: $DEFAULT_REPORT_FILE)"
+    echo "  -s SUMMARY_FILE: 요약 리포트 파일 이름 (기본값: $DEFAULT_SUMMARY_FILE)"
+    echo "  -d TOP_N_DATE: 일별 탐지 현황 표시 개수 (기본값: $DEFAULT_TOP_N_DATE)"
+    echo "  -i TOP_N_IP: IP 주소별 탐지 현황 표시 개수 (기본값: $DEFAULT_TOP_N_IP)"
+    echo "  -u TOP_N_URL: URL별 탐지 현황 표시 개수 (기본값: $DEFAULT_TOP_N_URL)"
+    echo "  -h: 이 도움말 메시지를 표시합니다."
+    exit 1
+}
+
+# getopts를 사용하여 옵션 파싱
+while getopts "f:r:s:d:i:u:h" opt; do
+    case $opt in
+        f) LOG_FILE="$OPTARG" ;;
+        r) REPORT_FILE="$OPTARG" ;;
+        s) SUMMARY_FILE="$OPTARG" ;;
+        d) TOP_N_DATE="$OPTARG" ;;
+        i) TOP_N_IP="$OPTARG" ;;
+        u) TOP_N_URL="$OPTARG" ;;
+        h) usage ;;
+        \?) echo "잘못된 옵션: -$OPTARG" >&2; usage ;;
+        :) echo "옵션 -$OPTARG 는 인수가 필요합니다." >&2; usage ;;
+    esac
+done
+shift $((OPTIND -1)) # 처리된 옵션 제거
 
 PATTERNS=(
     "SQL_INJECTION:.*' OR '1'='1"
@@ -86,36 +125,56 @@ get_threat_description() {
     echo "$description"
 }
 
-# 로그 파일 존재 여부 확인
+# 입력값 유효성 검사
 if [ ! -f "$LOG_FILE" ]; then
     echo "오류: 로그 파일 '$LOG_FILE'을(를) 찾을 수 없습니다."
     exit 1
 fi
+if ! [[ "$TOP_N_DATE" =~ ^[0-9]+$ ]]; then
+    echo "오류: 일별 Top N 값(-d)은 숫자여야 합니다. 입력값: $TOP_N_DATE"
+    exit 1
+fi
+if ! [[ "$TOP_N_IP" =~ ^[0-9]+$ ]]; then
+    echo "오류: IP별 Top N 값(-i)은 숫자여야 합니다. 입력값: $TOP_N_IP"
+    exit 1
+fi
+if ! [[ "$TOP_N_URL" =~ ^[0-9]+$ ]]; then
+    echo "오류: URL별 Top N 값(-u)은 숫자여야 합니다. 입력값: $TOP_N_URL"
+    exit 1
+fi
 
+# 파일 초기화
 if [ -f "$REPORT_FILE" ]; then rm "$REPORT_FILE"; fi
-if [ -f "$SUMMARY_FILE" ]; then rm "$SUMMARY_FILE"; fi # summary.txt 파일도 초기화
+if [ -f "$SUMMARY_FILE" ]; then rm "$SUMMARY_FILE"; fi
 
+# 상세 리포트 파일 헤더 작성
 echo "보안 감사 리포트 (상세 로그) - $(date)" > "$REPORT_FILE"
 echo "========================================" >> "$REPORT_FILE"
 echo "" >> "$REPORT_FILE"
 echo "분석 대상 로그 파일: $LOG_FILE" >> "$REPORT_FILE"
+echo "일별 탐지 요약 표시 개수: $TOP_N_DATE" >> "$REPORT_FILE"
+echo "IP 주소별 탐지 요약 표시 개수: $TOP_N_IP" >> "$REPORT_FILE"
+echo "URL별 탐지 요약 표시 개수: $TOP_N_URL" >> "$REPORT_FILE"
 echo "" >> "$REPORT_FILE"
 
+# 요약 리포트 파일 헤더 작성
 echo "보안 감사 요약 - $(date)" > "$SUMMARY_FILE"
 echo "========================================" >> "$SUMMARY_FILE"
 echo "" >> "$SUMMARY_FILE"
 echo "분석 대상 로그 파일: $LOG_FILE" >> "$SUMMARY_FILE"
+echo "일별 탐지 요약 표시 개수: $TOP_N_DATE" >> "$SUMMARY_FILE"
+echo "IP 주소별 탐지 요약 표시 개수: $TOP_N_IP" >> "$SUMMARY_FILE"
+echo "URL별 탐지 요약 표시 개수: $TOP_N_URL" >> "$SUMMARY_FILE"
 echo "" >> "$SUMMARY_FILE"
-
 
 found_any_threat=false
 total_log_lines_matched_overall=0
 threat_type_summary_data=""
-ip_summary_data="" # IP=count; 형태
-daily_summary_data="" # DATE=count; 형태
-top_ips_for_summary="" # IP=count 각 라인별 (Top 10)
-top_urls_for_summary_raw="" # base64URL\tcount 각 라인별 (Top 10)
-top_dates_for_summary="" # DATE=count 각 라인별 (Top 10)
+ip_summary_data=""
+daily_summary_data=""
+top_ips_for_summary=""
+top_urls_for_summary_raw=""
+top_dates_for_summary=""
 
 
 unique_threat_types_in_order=()
@@ -163,20 +222,21 @@ for pattern_item in "${PATTERNS[@]}"; do
 done
 
 if [ -f "$TEMP_MATCHED_LOGS" ] && [ -s "$TEMP_MATCHED_LOGS" ]; then
+    # IP별 요약
     extracted_ips_raw_for_summary=$(grep -o -E "$IP_REGEX" "$TEMP_MATCHED_LOGS" | sort | uniq -c | awk '{print $2 "=" $1}')
     for item in $extracted_ips_raw_for_summary; do ip_summary_data="${ip_summary_data}${item};"; done
     if [ -n "$ip_summary_data" ]; then
-        top_ips_for_summary=$(echo "$ip_summary_data" | tr ';' '\n' | grep . | awk -F'=' '{print $2 " " $1}' | sort -nr | head -n 10 | awk '{print $2 "=" $1}')
+        top_ips_for_summary=$(echo "$ip_summary_data" | tr ';' '\n' | grep . | awk -F'=' '{print $2 " " $1}' | sort -nr | head -n "$TOP_N_IP" | awk '{print $2 "=" $1}')
     fi
 
-
+    # 일별 요약
     extracted_dates_raw_for_summary=$(grep -o -E "$DATE_REGEX" "$TEMP_MATCHED_LOGS" | sed -E 's/^\[//' | sort | uniq -c | awk '{print $2 "=" $1}')
     for item in $extracted_dates_raw_for_summary; do daily_summary_data="${daily_summary_data}${item};"; done
     if [ -n "$daily_summary_data" ]; then
-         top_dates_for_summary=$(echo "$daily_summary_data" | tr ';' '\n' | grep . | awk -F'=' '{print $2 " " $1}' | sort -nr | head -n 10 | awk '{print $2 "=" $1}')
+         top_dates_for_summary=$(echo "$daily_summary_data" | tr ';' '\n' | grep . | awk -F'=' '{print $2 " " $1}' | sort -nr | head -n "$TOP_N_DATE" | awk '{print $2 "=" $1}')
     fi
 
-
+    # URL별 요약
     extracted_urls_raw_counts=$(awk -F'"' '{
         if (NF >= 2 && $2 ~ /^(GET|POST|PUT|DELETE|HEAD|OPTIONS|PATCH) /) {
             split($2, request_parts, " ");
@@ -195,11 +255,11 @@ if [ -f "$TEMP_MATCHED_LOGS" ] && [ -s "$TEMP_MATCHED_LOGS" ]; then
     done <<< "$extracted_urls_raw_counts"
     
     if [ -n "$current_url_summary_for_sorting" ]; then
-        top_urls_for_summary_raw=$(printf "%b" "$current_url_summary_for_sorting" | sort -t$'\t' -k2nr | head -n 10)
+        top_urls_for_summary_raw=$(printf "%b" "$current_url_summary_for_sorting" | sort -t$'\t' -k2nr | head -n "$TOP_N_URL")
     fi
 fi
 
-# audit_report.txt (상세 로그) 작성
+# 상세 리포트 파일 (audit_report.txt) 작성
 if [ "$found_any_threat" = true ]; then
     for current_threat_type_code in "${unique_threat_types_in_order[@]}"; do
         type_total_detections_str=$(echo "$threat_type_summary_data" | grep -o -E "${current_threat_type_code}=[^;]+" | cut -d'=' -f2)
@@ -225,7 +285,7 @@ fi
 echo "========================================" >> "$REPORT_FILE"
 
 
-# summary.txt (요약 정보) 작성
+# 요약 리포트 파일 (summary.txt) 작성
 if [ "$found_any_threat" = true ]; then
     echo "===== 감사 결과 요약 =====" >> "$SUMMARY_FILE"
     echo "총 매칭된 로그 라인 수 (모든 패턴 합계, 중복 포함 가능): $total_log_lines_matched_overall" >> "$SUMMARY_FILE"
@@ -248,7 +308,7 @@ if [ "$found_any_threat" = true ]; then
     echo "" >> "$SUMMARY_FILE"
 
     if [ -n "$top_dates_for_summary" ]; then
-        echo "--- 일별 탐지 현황 (Top 10일, 건수 기준) ---" >> "$SUMMARY_FILE"
+        echo "--- 일별 탐지 현황 (Top $TOP_N_DATE, 건수 기준) ---" >> "$SUMMARY_FILE"
         while IFS="=" read -r date count; do
             if [ -n "$date" ] && [ -n "$count" ]; then
                  printf "  - %-15s : %s 건\n" "$date" "$count" >> "$SUMMARY_FILE"
@@ -258,7 +318,7 @@ if [ "$found_any_threat" = true ]; then
     fi
 
     if [ -n "$top_ips_for_summary" ]; then
-        echo "--- IP 주소별 탐지 현황 (Top 10) ---" >> "$SUMMARY_FILE"
+        echo "--- IP 주소별 탐지 현황 (Top $TOP_N_IP) ---" >> "$SUMMARY_FILE"
         while IFS="=" read -r ip count; do
             if [ -n "$ip" ] && [ -n "$count" ]; then
                  printf "  - %-15s : %s 건\n" "$ip" "$count" >> "$SUMMARY_FILE"
@@ -268,7 +328,7 @@ if [ "$found_any_threat" = true ]; then
     fi
 
     if [ -n "$top_urls_for_summary_raw" ]; then
-        echo "--- URL별 탐지 현황 (Top 10, 건수 기준) ---" >> "$SUMMARY_FILE"
+        echo "--- URL별 탐지 현황 (Top $TOP_N_URL, 건수 기준) ---" >> "$SUMMARY_FILE"
         while IFS=$'\t' read -r encoded_url count; do
             if [ -n "$encoded_url" ] && [ -n "$count" ]; then
                 decoded_url_base64=$(echo "$encoded_url" | base64 -d 2>/dev/null)
@@ -307,7 +367,7 @@ if [ "$found_any_threat" = false ]; then
 else
     echo "리포트 생성 완료: $REPORT_FILE, $SUMMARY_FILE"
     echo ""
-    cat "$SUMMARY_FILE" # 터미널에는 summary.txt 내용만 출력
+    cat "$SUMMARY_FILE"
 fi
 
 if [ -f "$TEMP_MATCHED_LOGS" ]; then
