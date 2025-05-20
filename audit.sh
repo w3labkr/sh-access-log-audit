@@ -67,47 +67,105 @@ fi
 
 
 PATTERNS=(
+    # SQL Injection (기존 + 보강)
     "SQL_INJECTION:.*' OR '1'='1"
-    "SQL_INJECTION:.*UNION SELECT"
-    "SQL_INJECTION:.*(information_schema|pg_catalog|mysql\.user)"
+    "SQL_INJECTION:.*(\b(UNION|SELECT)\b.{1,100}?\b(FROM|SLEEP|BENCHMARK|PG_SLEEP|WAITFOR)\b)"
+    "SQL_INJECTION:.*(information_schema|pg_catalog|mysql\.user|sys\.tables|sysobjects)"
     "SQL_INJECTION:.*(SLEEP\(|BENCHMARK\(|pg_sleep\(|WAITFOR DELAY)"
-    "XSS:.*<script>.*</script>"
-    "XSS:.*javascript:"
-    "XSS:.*onerror="
-    "XSS:.*onload="
-    "XSS:.*<iframe.*src="
-    "PATH_TRAVERSAL_LFI:.*(\.\./|\.%2e%2e%2f|\.%252e%252e%252f)"
-    "PATH_TRAVERSAL_LFI:.*etc/passwd"
-    "PATH_TRAVERSAL_LFI:.*WEB-INF/web\.xml"
-    "RFI:.*(include|require).*=(http://|https://|ftp://|php://input|php://filter)"
-    "CMD_INJECTION:.*(cmd=|exec=|command=|system=|passthru=|shell_exec=|popen=|pcntl_exec)"
-    "CMD_INJECTION:.*(&&|\|\||;|%0a|%0d|\\\`|\$\(|\$\{)"
-    "CMD_INJECTION:.*(cat /etc/passwd|whoami|uname -a|id)"
-    "SENSITIVE_FILE_ACCESS:.*wp-login\.php"
-    "SENSITIVE_FILE_ACCESS:.*\.env"
-    "SENSITIVE_FILE_ACCESS:.*\.git/config"
-    "SENSITIVE_FILE_ACCESS:.*\.pem"
-    "SENSITIVE_FILE_ACCESS:.*\.key"
-    "SENSITIVE_FILE_ACCESS:.*\.htaccess"
-    "SENSITIVE_FILE_ACCESS:.*\.htpasswd"
-    "SENSITIVE_FILE_ACCESS:.*phpinfo\.php"
-    "SENSITIVE_FILE_ACCESS:.*server-status"
-    "SENSITIVE_FILE_BACKUP:.*(\.bak|\.backup|\.old|\.orig|\.sql|\.config|\.conf|\.zip|\.tar\.gz|\.tgz|~)$"
-    "DIRECTORY_LISTING:.*Index of /"
-    "DIRECTORY_LISTING:.*parent directory"
-    "SSRF:.*(127\.0\.0\.1|localhost|169\.254\.169\.254|\[::1\])"
-    "SSRF:.*(url=|uri=|target=|dest=|file=|path=).*(file:///|http://127|http://localhost|http://169\.254)"
-    "XXE_INJECTION:.*<!ENTITY.*SYSTEM.*>"
-    "LOG4J_JNDI_LOOKUP:.*\\$\{jndi:(ldap|ldaps|rmi|dns):"
+    "SQL_INJECTION:.*(--|#|/\*|\*/|;).*(DROP|DELETE|INSERT|UPDATE|ALTER|CREATE)\b"
+    "SQL_INJECTION:.*(xp_cmdshell|sp_configure|OPENROWSET|OPENDATASOURCE)"
+    "SQL_INJECTION_NOSQL:.*([$]ne|[$]gt|[$]lt|[$]regex|[$]where)"
+
+    # XSS (Cross-Site Scripting) (기존 + 보강)
+    "XSS:.*<script\b[^>]*>.*?</script\b[^>]*>"
+    "XSS:.*<img\b[^>]*\b(src|onerror|onload)\s*=\s*[^>]*javascript:[^>]+>"
+    "XSS:.*<[a-zA-Z]+\b[^>]*\b(on\w+)\s*=\s*[^>]*[^'\"\s>]+"
+    "XSS:.*<iframe\b[^>]*\b(src|srcdoc)\s*=\s*[^>]*javascript:[^>]+>"
+    "XSS:.*(alert\(|confirm\(|prompt\(|document\.cookie|document\.write\(|window\.location)"
+    "XSS:.*(expression\(|eval\(|setTimeout\(|setInterval\()"
+    "XSS_ENCODED:.*(%3Cscript|%3Cimg|%3Csvg|%253Cscript|<script|<script)" # 수정: <script 중복 제거 및 HTML 엔티티 추가
+    "XSS_DOM:.*(#|location\.hash\s*=).*(<script>|javascript:)"
+
+    # Path Traversal / LFI (Local File Inclusion) (기존 + 보강)
+    "PATH_TRAVERSAL_LFI:.*(\.\.[/\\]|\.%2e%2e[%2f%5c]|\.%252e%252e[%252f%255c])"
+    "PATH_TRAVERSAL_LFI:.*(etc/passwd|boot\.ini|win\.ini|system32/drivers/etc/hosts)"
+    "PATH_TRAVERSAL_LFI:.*(WEB-INF/web\.xml|META-INF/MANIFEST\.MF)"
+    "PATH_TRAVERSAL_LFI:.*(\%00|\0)"
+
+    # RFI (Remote File Inclusion) (기존 + 보강)
+    "RFI:.*(include|require|include_once|require_once)\s*[_A-Z0-9\[\]\"']*\s*=\s*(ht|f)tps?://[^&?\s]+"
+    "RFI:.*(include|require|include_once|require_once)\s*[_A-Z0-9\[\]\"']*\s*=\s*(php|data|expect)://[^&?\s]+"
+
+    # Command Injection (기존 + 보강)
+    "CMD_INJECTION:.*(;|%3B|\n|%0A|\r|%0D|[\`]|[$]\(|\&\&|\|\|)"
+    "CMD_INJECTION:.*(cmd=|exec=|command=|system=|passthru=|shell_exec=|popen=|pcntl_exec|eval\(|assert\()"
+    "CMD_INJECTION:.*(cat\s+/etc/passwd|whoami|uname\s+-a|id|ls\s+-la|netstat|ifconfig|ipconfig|ping\s+-c\s+\d)"
+    "CMD_INJECTION:.*(nc\s+-l\s+-p|ncat|powershell|bash\s+-c|perl\s+-e|python\s+-c|ruby\s+-e)"
+
+    # Sensitive File Access (기존 + 보강)
+    "SENSITIVE_FILE_ACCESS:.*wp-config\.php"
+    "SENSITIVE_FILE_ACCESS:.*(\.env|\.htpasswd|\.htaccess|\.git/config|config\.php|settings\.php|localsettings\.php|credentials|database\.yml|secrets\.yml)"
+    "SENSITIVE_FILE_ACCESS:.*(\.pem|\.key|\.p12|\.crt|\.csr|\.jks)"
+    "SENSITIVE_FILE_ACCESS:.*(phpinfo\.php|test\.php|info\.php|status\?full|server-status|manager/html)"
+    "SENSITIVE_FILE_ACCESS:.*(web\.config|appsettings\.json)"
+
+    # Sensitive Backup File Access (기존 + 보강)
+    "SENSITIVE_FILE_BACKUP:.*(\.(bak|backup|old|orig|sql|config|conf|zip|tar\.gz|tgz|swp|~|save|copy|dev|prod|staging|bkp|bk))([\?&]|$)"
+
+    # Directory Listing (유지)
+    "DIRECTORY_LISTING:.*(Index of /|parent directory)"
+
+    # SSRF (Server-Side Request Forgery) (기존 + 보강)
+    "SSRF:.*(127\.0\.0\.1|localhost|\[::1\]|0\.0\.0\.0)"
+    "SSRF:.*(169\.254\.169\.254|metadata\.google\.internal|instance-data/latest/)"
+    "SSRF:.*(url=|uri=|target=|dest=|file=|path=|host=|data=|feed=|image_url=).*(file:///|dict://|sftp://|ldap://|gopher://|jar://)"
+    "SSRF:.*(url=|uri=|target=|dest=).*(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)"
+
+    # XXE (XML External Entity) Injection (기존 + 보강)
+    "XXE_INJECTION:.*(<!ENTITY\s+[^>]*\s+(SYSTEM|PUBLIC)\s+[\"'][^\"']*[\"']>)"
+    "XXE_INJECTION:.*(<!ENTITY\s+%\s+[^>]*\s+SYSTEM)"
+    "XXE_INJECTION:.*(xxe_payload|ENTITY\s+xxe)"
+
+    # Log4Shell (CVE-2021-44228) (유지)
+    "LOG4J_JNDI_LOOKUP:.*\\$\{jndi:(ldap|ldaps|rmi|dns|iiop|corba|nis|nds):"
+
+    # Spring4Shell (CVE-2022-22965) (유지)
     "SPRING4SHELL_RCE:.*class\.module\.classLoader"
+
+    # Insecure Deserialization
     "DESERIALIZATION_PHP_OBJECT:.*O:[0-9]+:\""
-    "FILE_UPLOAD_VULN:.*POST .*/(upload|files|uploads)/.*(\.php[3457s]?|\.phtml|\.phar|\.jsp|\.asp|\.aspx|\.sh|\.exe|\.cgi|\.pl)"
-    "AUTH_BYPASS:.*(admin_bypass|is_admin=true|role=admin)"
-    "VULN_COMPONENT_ACCESS:.*(/phpmyadmin/|/pma/|/wp-admin/|/admin/|/manager/html)"
-    "OPEN_REDIRECT:.*(redirect=|url=|next=|location=|goto=)(http://|https://|//)[^/\\s?&]"
-    "INFO_DISCLOSURE_DEBUG:.*debug=(true|1)"
-    "VERBOSE_ERROR_MESSAGES:.*(Stack Trace|Traceback \(most recent call last\)|PHP Fatal error:|Syntax error near)"
-    "LOG_INJECTION:.*(%0d|%0a|\\r|\\n)"
+    "DESERIALIZATION_JAVA_OBJECT:.*( rO0ABXNy|aced0005|ysoserial| Javassist\.CtClass|weblogic\.jms\.common\.StreamMessageImpl)"
+
+    # File Upload Vulnerabilities
+    "FILE_UPLOAD_VULN:.*POST .*/(upload|files|uploads|tmp|temp|images)/.*\.(php[3457s]?|phtml|phar|aspx?|jspx?|sh|exe|dll|cgi|pl|py|rb|war|jar)(\.[^./]+)*"
+    "FILE_UPLOAD_VULN:.*Content-Disposition:.*\bfilename\s*=\s*[\"'].*\.(php|jsp|asp|sh)[\"']"
+
+    # Authentication Bypass
+    "AUTH_BYPASS:.*(admin_bypass|is_admin=(true|1)|role=(admin|root)|user_level=0|debug_mode=1)"
+    "AUTH_BYPASS:.*(X-Forwarded-For:\s*127\.0\.0\.1|X-Original-URL:|X-Rewrite-URL:|Authorization:\s*Basic\s*YWRtaW46YWRtaW4=)"
+
+    # Vulnerable Component Access
+    "VULN_COMPONENT_ACCESS:.*(/phpmyadmin/|/pma/|/wp-admin/|/admin/|/manager/html|/jmx-console/|/web-console/|struts/dojo/)"
+
+    # Open Redirect
+    "OPEN_REDIRECT:.*(redirect=|url=|next=|location=|goto=|target=|return=|return_to=|checkout_url=)(https?%3A%2F%2F|%2F%2F|\\\\|%5C%5C)[^/\\s?&][^\"'<>]+"
+
+    # Information Disclosure / Debug Mode
+    "INFO_DISCLOSURE_DEBUG:.*(debug=(true|1)|TRACE\s+/|TRACK\s+/|X-Debug-Token:|phpinfo\(\))"
+    "VERBOSE_ERROR_MESSAGES:.*(Stack Trace|Traceback \(most recent call last\)|PHP Fatal error:|Syntax error near|ORA-\d{5}:|java\.lang\.|Warning: Division by zero|Undefined index:)"
+
+    # Log Injection
+    "LOG_INJECTION:.*(%0d|%0a|\\r|\\n|\r\n)"
+
+    # Server-Side Template Injection (SSTI)
+    "SSTI:.*(\{\{.*\}\}|\{\%.*\%\}|<%=.*%>|[$]\{[^\}]+\}|#\{[^\}]+\})"
+    "SSTI:.*(config.SECRET_KEY|settings.SECRET_KEY|getattribute|lipsum|self.__init__|class.__bases__|mro\(\))"
+
+    # Prototype Pollution
+    "PROTOTYPE_POLLUTION:.*(__proto__|constructor\.prototype|Object\.prototype).*\s*=\s*\{"
+
+    # HTTP Request Smuggling / Desync
+    "HTTP_DESYNC:.*(Content-Length:\s*\d+\r\nTransfer-Encoding:\s*chunked|Transfer-Encoding:\s*chunked\r\nContent-Length:\s*\d+)"
 )
 
 IP_REGEX='^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}'
@@ -122,7 +180,10 @@ get_threat_description() {
     local type_code="$1"
     case "$type_code" in
         "SQL_INJECTION") description="SQL Injection: 데이터베이스 쿼리 조작 시도. 입력값 검증 및 Prepared Statement 사용 권고." ;;
+        "SQL_INJECTION_NOSQL") description="NoSQL Injection: NoSQL 데이터베이스 쿼리 조작 시도 (예: MongoDB). 입력값 검증 및 연산자 사용 주의." ;;
         "XSS") description="Cross-Site Scripting (XSS): 악성 스크립트 주입 시도. 출력값 인코딩 및 Content Security Policy(CSP) 적용 권고." ;;
+        "XSS_ENCODED") description="Encoded XSS Attempt: 인코딩된 악성 스크립트 주입 시도. 디코딩 후 검증 및 출력값 인코딩 필요." ;;
+        "XSS_DOM") description="DOM-based XSS Attempt: 클라이언트 측 스크립트를 통한 DOM 조작 시도. 안전한 DOM API 사용 및 입력값 검증." ;;
         "PATH_TRAVERSAL_LFI") description="Path Traversal/LFI: 허가되지 않은 파일 접근 시도. 사용자 입력 경로 검증 및 접근 권한 최소화 권고." ;;
         "RFI") description="Remote File Inclusion (RFI): 외부 악성 파일 실행 시도. 파일 포함 기능 사용 시 화이트리스트 기반 검증 권고." ;;
         "CMD_INJECTION") description="Command Injection: 서버 명령어 실행 시도. 시스템 명령어 호출 시 사용자 입력 직접 사용 금지 및 API 사용 권고." ;;
@@ -133,7 +194,8 @@ get_threat_description() {
         "XXE_INJECTION") description="XML External Entity (XXE) Injection: XML 외부 엔티티 처리 취약점 악용 시도. XML 파서의 외부 엔티티 기능 비활성화 권고." ;;
         "LOG4J_JNDI_LOOKUP") description="Log4Shell (CVE-2021-44228): Log4j 라이브러리 JNDI 주입 취약점 악용 시도. Log4j 최신 버전 업데이트 또는 JndiLookup 클래스 제거." ;;
         "SPRING4SHELL_RCE") description="Spring4Shell (CVE-2022-22965): Spring Framework RCE 취약점 악용 시도. Spring Framework/JDK 최신 버전 업데이트." ;;
-        "DESERIALIZATION_PHP_OBJECT") description="Insecure Deserialization (PHP): 안전하지 않은 객체 역직렬화 시도. 신뢰할 수 없는 데이터 역직렬화 금지." ;;
+        "DESERIALIZATION_PHP_OBJECT") description="Insecure Deserialization (PHP): 안전하지 않은 PHP 객체 역직렬화 시도. 신뢰할 수 없는 데이터 역직렬화 금지." ;;
+        "DESERIALIZATION_JAVA_OBJECT") description="Insecure Deserialization (Java): 안전하지 않은 Java 객체 역직렬화 시도. 신뢰할 수 없는 데이터 역직렬화 금지 및 라이브러리 업데이트." ;;
         "FILE_UPLOAD_VULN") description="Malicious File Upload: 악성 파일(웹쉘 등) 업로드 시도. 파일 확장자/타입 검증, 저장 경로 웹 루트 외부 지정, 실행 권한 제거." ;;
         "AUTH_BYPASS") description="Authentication Bypass Attempt: 인증 우회 시도. 강력한 인증 메커니즘 적용 및 접근 통제 검증." ;;
         "VULN_COMPONENT_ACCESS") description="Sensitive Component Access: 관리 도구, 취약한 컴포넌트 접근 시도. 불필요한 컴포넌트 제거 및 접근 통제 강화." ;;
@@ -141,6 +203,9 @@ get_threat_description() {
         "INFO_DISCLOSURE_DEBUG") description="Debug Mode Enabled: 디버그 모드 활성화로 인한 정보 노출. 운영 환경에서 디버그 모드 비활성화." ;;
         "VERBOSE_ERROR_MESSAGES") description="Verbose Error Messages: 상세 오류 메시지로 인한 내부 정보 노출. 일반화된 오류 메시지 사용." ;;
         "LOG_INJECTION") description="Log Injection / CRLF Injection: 로그 파일 조작 또는 HTTP 응답 분할 시도. 입력값 필터링 및 CRLF 문자 제거." ;;
+        "SSTI") description="Server-Side Template Injection (SSTI): 서버 측 템플릿을 이용한 코드 실행 시도. 사용자 입력 템플릿 사용 금지 또는 안전한 샌드박싱 적용." ;;
+        "PROTOTYPE_POLLUTION") description="Prototype Pollution: JavaScript 프로토타입 오염을 통한 속성 조작 또는 코드 실행 시도. 객체 병합 시 주의 및 라이브러리 업데이트." ;;
+        "HTTP_DESYNC") description="HTTP Request Smuggling/Desync: HTTP 요청 해석 불일치를 이용한 공격 시도. 프록시 및 웹 서버 설정 검토 및 업데이트." ;;
         *) description="$type_code: (설명 없음)" ;;
     esac
     echo "$description"
@@ -283,8 +348,8 @@ if [ -f "$TEMP_MATCHED_LOGS" ] && [ -s "$TEMP_MATCHED_LOGS" ]; then
         top_urls_for_summary_raw=$(printf "%b" "$current_url_summary_for_sorting" | sort -t$'\t' -k2nr | head -n "$TOP_N_URL")
     fi
 
-    # Referer별 요약
-    extracted_referers_raw_counts=$(awk -F'"' '{ if (NF >= 4 && $4 != "-" && $4 != "") print $4 }' "$TEMP_MATCHED_LOGS" | sort | uniq -c | awk '{$1=$1; printf "%s\t%s\n", $2, $1}')
+    # Referer별 요약 (수정된 로직)
+    extracted_referers_raw_counts=$(awk -F'"' '{ referer_field = $(NF-3); if (NF >= 6 && referer_field != "-" && referer_field != "") print referer_field }' "$TEMP_MATCHED_LOGS" | sort | uniq -c | awk '{$1=$1; printf "%s\t%s\n", $2, $1}')
     
     current_referer_summary_for_sorting=""
     while IFS=$'\t' read -r referer_path count; do
