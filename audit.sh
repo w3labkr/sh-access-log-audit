@@ -8,7 +8,7 @@ DEFAULT_TOP_N_DATE=10
 DEFAULT_TOP_N_IP=10
 DEFAULT_TOP_N_URL=10
 DEFAULT_TOP_N_REFERER=10
-DEFAULT_RUN_PATTERNS="" # New default: empty means run all patterns
+DEFAULT_ONLY_PATTERNS="SQL_INJECTION_GROUP,XSS_GROUP"
 
 LOG_FILE="$DEFAULT_LOG_FILE"
 REPORT_FILE="$DEFAULT_REPORT_FILE"
@@ -18,7 +18,7 @@ TOP_N_DATE="$DEFAULT_TOP_N_DATE"
 TOP_N_IP="$DEFAULT_TOP_N_IP"
 TOP_N_URL="$DEFAULT_TOP_N_URL"
 TOP_N_REFERER="$DEFAULT_TOP_N_REFERER"
-RUN_ONLY_PATTERNS="$DEFAULT_RUN_PATTERNS" # Stores the comma-separated list from the option
+ONLY_PATTERNS_SPECIFIED="$DEFAULT_ONLY_PATTERNS"
 
 usage() {
     echo "Usage: $0 [OPTIONS...]"
@@ -31,12 +31,64 @@ usage() {
     echo "  --top-ip TOP_N_IP                  Number of IP address detection entries to display (default: $DEFAULT_TOP_N_IP)"
     echo "  --top-url TOP_N_URL                Number of URL detection entries to display (default: $DEFAULT_TOP_N_URL)"
     echo "  --top-referer TOP_N_REFERER        Number of Referer detection entries to display (default: $DEFAULT_TOP_N_REFERER)"
-    echo "  --run-patterns PATTERN_TYPES       Comma-separated list of pattern types to run (e.g., SQL_INJECTION,XSS). Runs all if not specified."
+    echo "  --only-patterns PATTERN_TYPES      Comma-separated list of pattern types or group names to run."
+    echo "                                       (e.g., SQL_INJECTION_GROUP,XSS,CMD_INJECTION)."
+    echo "                                       Default is \"$DEFAULT_ONLY_PATTERNS\"."
+    echo "                                       To run ALL patterns, specify --only-patterns \"ALL\" or an empty string --only-patterns \"\"."
+    echo "  --list-groups                        List available pattern groups and their members."
     echo "  --help, -h                           Display this help message."
     exit 1
 }
 
+# 패턴 그룹 정의 (Bash 3.x 호환 방식)
+# 각 그룹을 별도의 변수로 정의하고, 그룹명 목록을 관리
+GROUP_SQL_INJECTION="SQL_INJECTION,SQL_INJECTION_NOSQL"
+GROUP_XSS="XSS,XSS_ENCODED,XSS_DOM"
+GROUP_SENSITIVE_FILE="SENSITIVE_FILE_ACCESS,SENSITIVE_FILE_BACKUP"
+GROUP_LFI_RFI="PATH_TRAVERSAL_LFI,RFI"
+GROUP_INJECTION_COMMANDS="CMD_INJECTION,LOG4J_JNDI_LOOKUP,SPRING4SHELL_RCE,SSTI"
+GROUP_DESERIALIZATION="DESERIALIZATION_PHP_OBJECT,DESERIALIZATION_JAVA_OBJECT"
+
+
+PATTERN_GROUP_NAMES=(
+    "SQL_INJECTION_GROUP"
+    "XSS_GROUP"
+    "SENSITIVE_FILE_GROUP"
+    "LFI_RFI_GROUP"
+    "INJECTION_COMMANDS_GROUP"
+    "DESERIALIZATION_GROUP"
+)
+
+get_group_members() {
+    local group_name_input="$1"
+    case "$group_name_input" in
+        "SQL_INJECTION_GROUP") echo "$GROUP_SQL_INJECTION" ;;
+        "XSS_GROUP") echo "$GROUP_XSS" ;;
+        "SENSITIVE_FILE_GROUP") echo "$GROUP_SENSITIVE_FILE" ;;
+        "LFI_RFI_GROUP") echo "$GROUP_LFI_RFI" ;;
+        "INJECTION_COMMANDS_GROUP") echo "$GROUP_INJECTION_COMMANDS" ;;
+        "DESERIALIZATION_GROUP") echo "$GROUP_DESERIALIZATION" ;;
+        *) echo "" ;;
+    esac
+}
+
+list_groups() {
+    echo "Available Pattern Groups and their members:"
+    for group_name_iter in "${PATTERN_GROUP_NAMES[@]}"; do
+        local members
+        members=$(get_group_members "$group_name_iter")
+        if [ -n "$members" ]; then
+            echo "  Group: $group_name_iter"
+            echo "    Members: $members"
+        fi
+    done
+    exit 0
+}
+
+
 ARGS=()
+only_patterns_option_provided=false
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --file|-f)
@@ -55,8 +107,17 @@ while [[ $# -gt 0 ]]; do
             if [[ -n "$2" && "$2" != -* ]]; then TOP_N_URL="$2"; shift 2; else echo "Error: --top-url option requires a numeric argument." >&2; usage; fi ;;
         --top-referer)
             if [[ -n "$2" && "$2" != -* ]]; then TOP_N_REFERER="$2"; shift 2; else echo "Error: --top-referer option requires a numeric argument." >&2; usage; fi ;;
-        --run-patterns)
-            if [[ -n "$2" && "$2" != -* ]]; then RUN_ONLY_PATTERNS="$2"; shift 2; else echo "Error: --run-patterns option requires a comma-separated list of pattern types argument." >&2; usage; fi ;;
+        --only-patterns)
+            only_patterns_option_provided=true
+            if [[ -n "$2" && "$2" != -* ]]; then
+                ONLY_PATTERNS_SPECIFIED="$2"; shift 2;
+            elif [[ "$2" == "" || $# -eq 1 ]]; then
+                ONLY_PATTERNS_SPECIFIED=""; shift $(($# > 1 ? 2 : 1));
+            else
+                echo "Error: --only-patterns option requires a comma-separated list of pattern types/groups argument or an empty string for all." >&2; usage;
+            fi ;;
+        --list-groups)
+            list_groups ;;
         --help|-h)
             usage ;;
         *)
@@ -71,9 +132,7 @@ if [ ${#ARGS[@]} -ne 0 ]; then
     usage
 fi
 
-
 PATTERNS=(
-    # SQL Injection
     "SQL_INJECTION:.*' OR '1'='1"
     "SQL_INJECTION:.*(\b(UNION|SELECT)\b.{1,100}?\b(FROM|SLEEP|BENCHMARK|PG_SLEEP|WAITFOR)\b)"
     "SQL_INJECTION:.*(information_schema|pg_catalog|mysql\.user|sys\.tables|sysobjects)"
@@ -81,8 +140,6 @@ PATTERNS=(
     "SQL_INJECTION:.*(--|#|/\*|\*/|;).*(DROP|DELETE|INSERT|UPDATE|ALTER|CREATE)\b"
     "SQL_INJECTION:.*(xp_cmdshell|sp_configure|OPENROWSET|OPENDATASOURCE)"
     "SQL_INJECTION_NOSQL:.*([$]ne|[$]gt|[$]lt|[$]regex|[$]where)"
-
-    # Cross-Site Scripting (XSS)
     "XSS:.*<script\b[^>]*>.*?</script\b[^>]*>"
     "XSS:.*<img\b[^>]*\b(src|onerror|onload)\s*=\s*[^>]*javascript:[^>]+>"
     "XSS:.*<[a-zA-Z]+\b[^>]*\b(on\w+)\s*=\s*[^>]*[^'\"\s>]+"
@@ -91,142 +148,114 @@ PATTERNS=(
     "XSS:.*(expression\(|eval\(|setTimeout\(|setInterval\()"
     "XSS_ENCODED:.*(%3Cscript|%3Cimg|%3Csvg|%253Cscript|<script|<script)"
     "XSS_DOM:.*(#|location\.hash\s*=).*(<script>|javascript:)"
-
-    # Path Traversal & Local File Inclusion (LFI)
     "PATH_TRAVERSAL_LFI:.*(\.\.[/\\]|\.%2e%2e[%2f%5c]|\.%252e%252e[%252f%255c])"
     "PATH_TRAVERSAL_LFI:.*(etc/passwd|boot\.ini|win\.ini|system32/drivers/etc/hosts)"
     "PATH_TRAVERSAL_LFI:.*(WEB-INF/web\.xml|META-INF/MANIFEST\.MF)"
     "PATH_TRAVERSAL_LFI:.*(\%00|\0)"
-
-    # Remote File Inclusion (RFI)
     "RFI:.*(include|require|include_once|require_once)\s*[_A-Z0-9\[\]\"']*\s*=\s*(ht|f)tps?://[^&?\s]+"
-    "RFI:.*(include|require|include_once|require_once)\s*[_A-Z0-9\[\]\"']*\s*=\s*(php|data|expect)://[^&?\s]+"
-    
-    # Command Injection
+    "RFI:.*(include|require|include_once|require_once)\s*[_A-Z0_9\[\]\"']*\s*=\s*(php|data|expect)://[^&?\s]+"
     "CMD_INJECTION:.*(;|%3B|\n|%0A|\r|%0D|[\`]|[$]\(|\&\&|\|\|)"
     "CMD_INJECTION:.*(cmd=|exec=|command=|system=|passthru=|shell_exec=|popen=|pcntl_exec|eval\(|assert\()"
     "CMD_INJECTION:.*(cat\s+/etc/passwd|whoami|uname\s+-a|id|ls\s+-la|netstat|ifconfig|ipconfig|ping\s+-c\s+\d)"
     "CMD_INJECTION:.*(nc\s+-l\s+-p|ncat|powershell|bash\s+-c|perl\s+-e|python\s+-c|ruby\s+-e)"
-    
-    # Sensitive File Access
     "SENSITIVE_FILE_ACCESS:.*wp-config\.php"
     "SENSITIVE_FILE_ACCESS:.*(\.env|\.htpasswd|\.htaccess|\.git/config|config\.php|settings\.php|localsettings\.php|credentials|database\.yml|secrets\.yml)"
     "SENSITIVE_FILE_ACCESS:.*(\.pem|\.key|\.p12|\.crt|\.csr|\.jks)"
     "SENSITIVE_FILE_ACCESS:.*(phpinfo\.php|test\.php|info\.php|status\?full|server-status|manager/html)"
     "SENSITIVE_FILE_ACCESS:.*(web\.config|appsettings\.json)"
     "SENSITIVE_FILE_BACKUP:.*(\.(bak|backup|old|orig|sql|config|conf|zip|tar\.gz|tgz|swp|~|save|copy|dev|prod|staging|bkp|bk))([\?&]|$)"
-    
-    # Directory Listing
     "DIRECTORY_LISTING:.*(Index of /|parent directory)"
-
-    # Server-Side Request Forgery (SSRF)
     "SSRF:.*(127\.0\.0\.1|localhost|\[::1\]|0\.0\.0\.0)"
     "SSRF:.*(169\.254\.169\.254|metadata\.google\.internal|instance-data/latest/)"
     "SSRF:.*(url=|uri=|target=|dest=|file=|path=|host=|data=|feed=|image_url=).*(file:///|dict://|sftp://|ldap://|gopher://|jar://)"
     "SSRF:.*(url=|uri=|target=|dest=).*(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)"
-    
-    # XML External Entity (XXE) Injection
     "XXE_INJECTION:.*(<!ENTITY\s+[^>]*\s+(SYSTEM|PUBLIC)\s+[\"'][^\"']*[\"']>)"
     "XXE_INJECTION:.*(<!ENTITY\s+%\s+[^>]*\s+SYSTEM)"
     "XXE_INJECTION:.*(xxe_payload|ENTITY\s+xxe)"
-    
-    # Log4Shell (JNDI Lookup)
     "LOG4J_JNDI_LOOKUP:.*\\$\{jndi:(ldap|ldaps|rmi|dns|iiop|corba|nis|nds):"
-    
-    # Spring4Shell (RCE)
     "SPRING4SHELL_RCE:.*class\.module\.classLoader"
-
-    # Insecure Deserialization
     "DESERIALIZATION_PHP_OBJECT:.*O:[0-9]+:\""
     "DESERIALIZATION_JAVA_OBJECT:.*( rO0ABXNy|aced0005|ysoserial| Javassist\.CtClass|weblogic\.jms\.common\.StreamMessageImpl)"
-    
-    # File Upload Vulnerabilities
     "FILE_UPLOAD_VULN:.*POST .*/(upload|files|uploads|tmp|temp|images)/.*\.(php[3457s]?|phtml|phar|aspx?|jspx?|sh|exe|dll|cgi|pl|py|rb|war|jar)(\.[^./]+)*"
     "FILE_UPLOAD_VULN:.*Content-Disposition:.*\bfilename\s*=\s*[\"'].*\.(php|jsp|asp|sh)[\"']"
-    
-    # Authentication Bypass
     "AUTH_BYPASS:.*(admin_bypass|is_admin=(true|1)|role=(admin|root)|user_level=0|debug_mode=1)"
     "AUTH_BYPASS:.*(X-Forwarded-For:\s*127\.0\.0\.1|X-Original-URL:|X-Rewrite-URL:|Authorization:\s*Basic\s*YWRtaW46YWRtaW4=)"
-    
-    # Vulnerable Component Access
     "VULN_COMPONENT_ACCESS:.*(/phpmyadmin/|/pma/|/wp-admin/|/admin/|/manager/html|/jmx-console/|/web-console/|struts/dojo/)"
-    
-    # Open Redirect
     "OPEN_REDIRECT:.*(redirect=|url=|next=|location=|goto=|target=|return=|return_to=|checkout_url=)(https?%3A%2F%2F|%2F%2F|\\\\|%5C%5C)[^/\\s?&][^\"'<>]+"
-    
-    # Information Disclosure / Debug
     "INFO_DISCLOSURE_DEBUG:.*(debug=(true|1)|TRACE\s+/|TRACK\s+/|X-Debug-Token:|phpinfo\(\))"
     "VERBOSE_ERROR_MESSAGES:.*(Stack Trace|Traceback \(most recent call last\)|PHP Fatal error:|Syntax error near|ORA-\d{5}:|java\.lang\.|Warning: Division by zero|Undefined index:)"
-    
-    # Log Injection / CRLF Injection
     "LOG_INJECTION:.*(%0d|%0a|\\r|\\n|\r\n)"
-    
-    # Server-Side Template Injection (SSTI)
     "SSTI:.*(\{\{.*\}\}|\{\%.*\%\}|<%=.*%>|[$]\{[^\}]+\}|#\{[^\}]+\})"
     "SSTI:.*(config.SECRET_KEY|settings.SECRET_KEY|getattribute|lipsum|self.__init__|class.__bases__|mro\(\))"
-    
-    # Prototype Pollution
     "PROTOTYPE_POLLUTION:.*(__proto__|constructor\.prototype|Object\.prototype).*\s*=\s*\{"
-    
-    # HTTP Desync / Request Smuggling
     "HTTP_DESYNC:.*(Content-Length:\s*\d+\r\nTransfer-Encoding:\s*chunked|Transfer-Encoding:\s*chunked\r\nContent-Length:\s*\d+)"
 )
 
-# Filter PATTERNS array if --run-patterns is specified
 PATTERNS_TO_RUN=()
-if [ -n "$RUN_ONLY_PATTERNS" ]; then
-    IFS=',' read -ra SELECTED_PATTERNS_ARRAY <<< "$RUN_ONLY_PATTERNS"
+final_selected_types_for_filtering=()
+
+if [[ "$only_patterns_option_provided" == true && ( -z "$ONLY_PATTERNS_SPECIFIED" || "$ONLY_PATTERNS_SPECIFIED" == "ALL" ) ]]; then
+    PATTERNS_TO_RUN=("${PATTERNS[@]}")
+    echo "INFO: Running with ALL patterns as specified by --only-patterns."
+elif [ -n "$ONLY_PATTERNS_SPECIFIED" ]; then
+    IFS=',' read -ra initial_selected_items <<< "$ONLY_PATTERNS_SPECIFIED"
+
+    temp_final_types_str=" "
+    for item in "${initial_selected_items[@]}"; do
+        trimmed_item=$(echo "$item" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+        group_members_str=$(get_group_members "$trimmed_item")
+
+        if [ -n "$group_members_str" ]; then
+            IFS=',' read -ra group_members_array <<< "$group_members_str"
+            for member in "${group_members_array[@]}"; do
+                trimmed_member=$(echo "$member" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+                if ! echo "$temp_final_types_str" | grep -q " $trimmed_member "; then
+                    final_selected_types_for_filtering+=("$trimmed_member")
+                    temp_final_types_str="$temp_final_types_str$trimmed_member "
+                fi
+            done
+        else
+            if ! echo "$temp_final_types_str" | grep -q " $trimmed_item "; then
+                 final_selected_types_for_filtering+=("$trimmed_item")
+                 temp_final_types_str="$temp_final_types_str$trimmed_item "
+            fi
+        fi
+    done
     
-    # 연관 배열 대신, 각 패턴 타입을 직접 비교
     for pattern_item in "${PATTERNS[@]}"; do
         IFS=":" read -r threat_type _ <<< "$pattern_item"
-        # 선택된 패턴 타입 목록(SELECTED_PATTERNS_ARRAY)에 현재 threat_type이 있는지 확인
         should_add=false
-        for selected_type in "${SELECTED_PATTERNS_ARRAY[@]}"; do
-            trimmed_selected_type=$(echo "$selected_type" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//') # 공백 제거
-            if [[ "$threat_type" == "$trimmed_selected_type" ]]; then
+        for selected_type_final in "${final_selected_types_for_filtering[@]}"; do
+            if [[ "$threat_type" == "$selected_type_final" ]]; then
                 should_add=true
                 break
             fi
         done
-
         if [[ "$should_add" == true ]]; then
             PATTERNS_TO_RUN+=("$pattern_item")
         fi
     done
 
     if [ ${#PATTERNS_TO_RUN[@]} -eq 0 ]; then
-        echo "Error: No patterns matched the specified types: '$RUN_ONLY_PATTERNS'" >&2
-        echo "Please check the pattern types. Available types from the script are:" >&2
-        declare -A available_types_map # 임시로 여기서만 사용 (출력용) - 이 부분도 수정 필요하면 아래 참고
-        # 혹은 아래처럼 수정:
-        # local available_types_output="" 
-        # for pattern_item_temp in "${PATTERNS[@]}"; do
-        #     IFS=":" read -r threat_type_temp _ <<< "$pattern_item_temp"
-        #     if [[ -n "$threat_type_temp" && "$available_types_output" != *"$threat_type_temp"* ]]; then
-        #          available_types_output="$available_types_output $threat_type_temp"
-        #     fi
-        # done
-        # echo "  Available types:$available_types_output" >&2
-        # exit 1
-        # --- 아래는 기존 코드 (오류 출력용 연관 배열) ---
-        declare -A available_types_map # To list unique types from the main PATTERNS array
-        for pattern_item_map in "${PATTERNS[@]}"; do
-            IFS=":" read -r threat_type_map _ <<< "$pattern_item_map"
-            if [ -n "$threat_type_map" ] && [[ -z "${available_types_map[$threat_type_map]}" ]]; then
-                echo "  $threat_type_map" >&2
-                available_types_map["$threat_type_map"]=1
+        echo "Error: No patterns matched the specified types/groups: '$ONLY_PATTERNS_SPECIFIED'" >&2
+        echo "Please check the pattern types/groups. Default is '$DEFAULT_ONLY_PATTERNS'. To run all, use --only-patterns \"ALL\" or --only-patterns \"\"." >&2
+        echo "Use --list-groups to see available groups. Available individual types are:" >&2
+        local unique_types_string_err=" "
+        for p_item in "${PATTERNS[@]}"; do
+            IFS=":" read -r t_type _ <<< "$p_item"
+            if [[ -n "$t_type" ]]; then
+                if ! echo "$unique_types_string_err" | grep -q " $t_type "; then
+                    unique_types_string_err="$unique_types_string_err$t_type "
+                    echo "  $t_type" >&2
+                fi
             fi
         done
-        unset available_types_map
         exit 1
-        # --- 기존 코드 끝 ---
     fi
 else
-    # If no specific patterns are requested, use all defined patterns
+    echo "INFO: No specific patterns provided and default did not apply as expected. Running with ALL patterns as a fallback."
     PATTERNS_TO_RUN=("${PATTERNS[@]}")
 fi
-
 
 IP_REGEX='^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}'
 DATE_REGEX='\[([0-9]{2}/[A-Za-z]{3}/[0-9]{4})'
@@ -238,7 +267,7 @@ url_decode() {
 
 get_threat_description() {
     local type_code="$1"
-    local description="" 
+    local description=""
     case "$type_code" in
         "SQL_INJECTION") description="SQL Injection: Attempt to manipulate database queries. Recommend input validation and use of Prepared Statements." ;;
         "SQL_INJECTION_NOSQL") description="NoSQL Injection: Attempt to manipulate NoSQL database queries (e.g., MongoDB). Recommend input validation and careful use of operators." ;;
@@ -312,8 +341,11 @@ echo "Number of Daily Detections to Display: $TOP_N_DATE" >> "$SUMMARY_FILE"
 echo "Number of IP Address Detections to Display: $TOP_N_IP" >> "$SUMMARY_FILE"
 echo "Number of URL Detections to Display: $TOP_N_URL" >> "$SUMMARY_FILE"
 echo "Number of Referer Detections to Display: $TOP_N_REFERER" >> "$SUMMARY_FILE"
-if [ -n "$RUN_ONLY_PATTERNS" ]; then
-    echo "Pattern Filtering Applied: Run only [$RUN_ONLY_PATTERNS]" >> "$SUMMARY_FILE"
+
+if [[ "$only_patterns_option_provided" == true && ( -z "$ONLY_PATTERNS_SPECIFIED" || "$ONLY_PATTERNS_SPECIFIED" == "ALL" ) ]]; then
+    echo "Patterns Executed: ALL patterns" >> "$SUMMARY_FILE"
+elif [ -n "$ONLY_PATTERNS_SPECIFIED" ]; then
+    echo "Patterns Executed (User Input): [$ONLY_PATTERNS_SPECIFIED]" >> "$SUMMARY_FILE"
 fi
 echo "Number of Web Vulnerability Check Patterns Used: ${#PATTERNS_TO_RUN[@]} (out of ${#PATTERNS[@]} total defined)" >> "$SUMMARY_FILE"
 echo "" >> "$SUMMARY_FILE"
@@ -331,21 +363,18 @@ top_referers_for_summary_raw=""
 
 
 unique_threat_types_in_order=()
-temp_seen_types_str=""
-# Use PATTERNS_TO_RUN to determine which threat types are active
+temp_seen_types_str_report=" "
 for pattern_item in "${PATTERNS_TO_RUN[@]}"; do
     IFS=":" read -r threat_type _ <<< "$pattern_item"
     if [ -z "$threat_type" ]; then continue; fi
-    if ! echo "$temp_seen_types_str" | grep -q -w "$threat_type"; then
+    if ! echo "$temp_seen_types_str_report" | grep -q " $threat_type "; then
         unique_threat_types_in_order+=("$threat_type")
-        temp_seen_types_str="$temp_seen_types_str$threat_type "
+        temp_seen_types_str_report="$temp_seen_types_str_report$threat_type "
     fi
 done
-unset temp_seen_types_str
 
 TEMP_MATCHED_LOGS=$(mktemp)
 
-# Calculate threat_type_summary_data based on PATTERNS_TO_RUN
 for current_threat_type in "${unique_threat_types_in_order[@]}"; do
     type_specific_total_count=0
     for pattern_item in "${PATTERNS_TO_RUN[@]}"; do
@@ -361,7 +390,6 @@ for current_threat_type in "${unique_threat_types_in_order[@]}"; do
     fi
 done
 
-# Populate TEMP_MATCHED_LOGS using PATTERNS_TO_RUN
 if [ "$found_any_threat" = true ]; then
     for pattern_item in "${PATTERNS_TO_RUN[@]}"; do
         IFS=":" read -r _ pattern <<< "$pattern_item"
@@ -370,14 +398,16 @@ if [ "$found_any_threat" = true ]; then
     done
 fi
 
-# Recalculate total_log_lines_matched_overall based on PATTERNS_TO_RUN
-total_log_lines_matched_overall=0 
-for pattern_item in "${PATTERNS_TO_RUN[@]}"; do
-    IFS=":" read -r _ pattern <<< "$pattern_item"
-    if [ -z "$pattern" ]; then continue; fi
-    count_for_this_pattern=$(grep -E -i -c "$pattern" "$LOG_FILE")
-    total_log_lines_matched_overall=$((total_log_lines_matched_overall + count_for_this_pattern))
-done
+total_log_lines_matched_overall=0
+if [ -f "$TEMP_MATCHED_LOGS" ]; then
+    for pattern_item in "${PATTERNS_TO_RUN[@]}"; do
+        IFS=":" read -r _ pattern <<< "$pattern_item"
+        if [ -z "$pattern" ]; then continue; fi
+        count_for_this_pattern=$(grep -E -i -c "$pattern" "$LOG_FILE")
+        total_log_lines_matched_overall=$((total_log_lines_matched_overall + count_for_this_pattern))
+    done
+fi
+
 
 if [ -f "$TEMP_MATCHED_LOGS" ] && [ -s "$TEMP_MATCHED_LOGS" ]; then
     extracted_ips_raw_for_summary=$(grep -o -E "$IP_REGEX" "$TEMP_MATCHED_LOGS" | sort | uniq -c | awk '{print $2 "=" $1}')
@@ -408,13 +438,13 @@ if [ -f "$TEMP_MATCHED_LOGS" ] && [ -s "$TEMP_MATCHED_LOGS" ]; then
             current_url_summary_for_sorting="${current_url_summary_for_sorting}${encoded_url_path}\t${count}\n"
         fi
     done <<< "$extracted_urls_raw_counts"
-    
+
     if [ -n "$current_url_summary_for_sorting" ]; then
         top_urls_for_summary_raw=$(printf "%b" "$current_url_summary_for_sorting" | sort -t$'\t' -k2nr | head -n "$TOP_N_URL")
     fi
 
     extracted_referers_raw_counts=$(awk -F'"' '{ referer_field = $(NF-3); if (NF >= 6 && referer_field != "-" && referer_field != "") print referer_field }' "$TEMP_MATCHED_LOGS" | sort | uniq -c | awk '{$1=$1; printf "%s\t%s\n", $2, $1}')
-    
+
     current_referer_summary_for_sorting=""
     while IFS=$'\t' read -r referer_path count; do
         if [ -n "$referer_path" ] && [ -n "$count" ]; then
@@ -430,7 +460,6 @@ if [ -f "$TEMP_MATCHED_LOGS" ] && [ -s "$TEMP_MATCHED_LOGS" ]; then
 fi
 
 if [ "$found_any_threat" = true ]; then
-    # Iterate over unique threat types found (derived from PATTERNS_TO_RUN)
     for current_threat_type_code in "${unique_threat_types_in_order[@]}"; do
         type_total_detections_str=$(echo "$threat_type_summary_data" | grep -o -E "${current_threat_type_code}=[^;]+" | cut -d'=' -f2)
         type_total_detections=${type_total_detections_str:-0}
@@ -441,7 +470,6 @@ if [ "$found_any_threat" = true ]; then
             echo "Threat Type: $threat_name_for_report (Code: $current_threat_type_code, Total Detected Log Lines: $type_total_detections)" >> "$REPORT_FILE"
             echo "Description: $(echo "$threat_desc_full" | cut -d':' -f2-)" >> "$REPORT_FILE"
             echo "Detected Logs:" >> "$REPORT_FILE"
-            # List logs for this specific threat type using patterns from PATTERNS_TO_RUN
             for pattern_item_inner in "${PATTERNS_TO_RUN[@]}"; do
                 IFS=":" read -r inner_threat_type inner_pattern <<< "$pattern_item_inner"
                 if [[ "$inner_threat_type" == "$current_threat_type_code" ]]; then
@@ -511,7 +539,6 @@ if [ "$found_any_threat" = true ]; then
                     fi
                     printf "  - %s : %s events\n" "$display_url" "$count" >> "$SUMMARY_FILE"
                 else
-                    # Fallback to display encoded_url if base64 decoding fails or result is empty
                     if [ ${#encoded_url} -gt 70 ]; then
                         display_url="${encoded_url:0:67}..."
                     else
@@ -538,7 +565,6 @@ if [ "$found_any_threat" = true ]; then
                     fi
                     printf "  - %s : %s events\n" "$display_referer" "$count" >> "$SUMMARY_FILE"
                 else
-                    # Fallback for referer
                     if [ ${#encoded_referer} -gt 70 ]; then
                         display_referer="${encoded_referer:0:67}..."
                     else
@@ -563,7 +589,7 @@ if [ "$found_any_threat" = true ] && [ -f "$TEMP_MATCHED_LOGS" ] && [ -s "$TEMP_
     grep -o -E "$IP_REGEX" "$TEMP_MATCHED_LOGS" | sort -u | awk '{print "- " $0}' > "$BLACKLIST_FILE"
     echo "IP blacklist created: $BLACKLIST_FILE"
 else
-    > "$BLACKLIST_FILE" 
+    > "$BLACKLIST_FILE"
     echo "No threats detected (or no logs matched selected patterns), empty IP blacklist file created: $BLACKLIST_FILE"
 fi
 
