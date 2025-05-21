@@ -29,13 +29,21 @@ This script is recommended for analyzing multiple log files (e.g., `access-*.log
 
 **Options for `audits.sh`:**
 
-* `-f LOG_FILE`, `--file LOG_FILE`: Path to a specific log file to analyze. If not provided, the script looks for files matching `access-*.log` in the current directory, and then for `access.log`.
-* `-o OUTPUT_DIR`, `--output OUTPUT_DIR`: Base directory to save all report files.
+* `-f LOG_FILE`, `--file LOG_FILE`: Path to a specific log file to analyze. If provided, `audits.sh` will only process this file, ignoring the default pattern search.
+* `-o OUTPUT_DIR`, `--output OUTPUT_DIR`: Directory where report files will be saved.
   * Default: `output`
-* `--only-patterns "PATTERNS"`: Comma-separated list of pattern types or group names (from `audit.sh`) to run.
-  * Default: `"SQL_INJECTION_GROUP,XSS_GROUP"`
-  * Example: `--only-patterns "SQL_INJECTION_GROUP,XSS,CMD_INJECTION"`
-  * To run all patterns defined in `audit.sh`, pass an empty string (`--only-patterns ""`) or `"ALL"`.
+* `--only-patterns PATTERN_TYPES`: Comma-separated list of pattern types or group names to be passed to `audit.sh`.
+  * Default (if this option is not used): `SQL_INJECTION_GROUP,XSS_GROUP` will be passed to `audit.sh`.
+  * To instruct `audit.sh` to run ALL its defined patterns, specify `--only-patterns "ALL"`.
+  * If `--only-patterns ""` (an empty string) is specified for `audits.sh`, then `audit.sh` will be called *without* an `--only-patterns` option, causing `audit.sh` to use its own default patterns (typically `SQL_INJECTION_GROUP,XSS_GROUP`).
+  * Available pattern types and groups:
+    * `SQL_INJECTION_GROUP`: Includes `SQL_INJECTION`, `SQL_INJECTION_NOSQL`.
+    * `XSS_GROUP`: Includes `XSS`, `XSS_ENCODED`, `XSS_DOM`.
+    * `SENSITIVE_FILE_GROUP`: Includes `SENSITIVE_FILE_ACCESS`, `SENSITIVE_FILE_BACKUP`.
+    * `LFI_RFI_GROUP`: Includes `PATH_TRAVERSAL_LFI`, `RFI`.
+    * `INJECTION_COMMANDS_GROUP`: Includes `CMD_INJECTION`, `LOG4J_JNDI_LOOKUP`, `SPRING4SHELL_RCE`, `SSTI`.
+    * `DESERIALIZATION_GROUP`: Includes `DESERIALIZATION_PHP_OBJECT`, `DESERIALIZATION_JAVA_OBJECT`.
+    * Individual patterns: `SQL_INJECTION`, `SQL_INJECTION_NOSQL`, `XSS`, `XSS_ENCODED`, `XSS_DOM`, `PATH_TRAVERSAL_LFI`, `RFI`, `CMD_INJECTION`, `LOG4J_JNDI_LOOKUP`, `SPRING4SHELL_RCE`, `SSTI`, `SENSITIVE_FILE_ACCESS`, `SENSITIVE_FILE_BACKUP`, `DESERIALIZATION_PHP_OBJECT`, `DESERIALIZATION_JAVA_OBJECT`.
 
 ### 2. `audit.sh` (Core analysis script for a single log file)
 
@@ -75,9 +83,9 @@ This script performs the actual analysis on a single log file. It's typically ca
 
 **For `audits.sh`:**
 
-* Log Files: `access-*.log` in `./`, then `./access.log` if no specific file via `-f`.
+* Log Files: By default, processes `access-*.log` files found in the current directory (`./`). If the `-f` (or `--file`) option is used, only the specified file is processed. If no files match the `access-*.log` pattern and the `-f` option is not used, the script will report an error and exit.
 * Output Directory: `output/`
-* Patterns to Run: `SQL_INJECTION_GROUP,XSS_GROUP`
+* Patterns to Run: If the `--only-patterns` option is not supplied to `audits.sh`, it defaults to passing `SQL_INJECTION_GROUP,XSS_GROUP` to `audit.sh`.
 
 **For `audit.sh` (when run directly):**
 
@@ -155,37 +163,20 @@ The `audit.sh` script checks for a wide range of common web vulnerabilities and 
 
 2. **To analyze multiple log files or with more control over batching, use `audits.sh`:**
 
-   * Analyze all `access-*.log` files in the current directory and then `access.log` if no pattern matches, saving reports to `output/`:
-
-     ```bash
-     ./audits.sh
-     ```
-
-   * Analyze a specific log file:
-
-     ```bash
-     ./audits.sh -f /var/log/nginx/access.log
-     ```
-
-   * Analyze a specific log file and save reports to a custom directory:
-
-     ```bash
-     ./audits.sh -f /path/to/your/access.log -o /path/to/reports
-     ```
-
-   * Analyze default log files but only for SQL Injection and XSS patterns:
-
-     ```bash
-     ./audits.sh --only-patterns "SQL_INJECTION_GROUP,XSS_GROUP"
-     ```
-
-3. **To analyze a single log file directly with `audit.sh`:**
-
    ```bash
-   ./audit.sh -f /var/log/nginx/access.log -o my_reports --report-file detailed_threats.txt
+   ./audits.sh [OPTIONS...]
+   # Example: Analyze all access-*.log files and output to 'my_reports'
+   # ./audits.sh -o my_reports
+
+   # Example: Analyze a specific file 'server.log' with specific patterns
+   # ./audits.sh -f server.log --only-patterns "SQL_INJECTION_GROUP,LFI_RFI_GROUP"
    ```
 
-   (If no log file is specified with `-f` for `audit.sh`, it attempts to find `access.log`.)
+3. **To analyze a single log file with `audit.sh` directly:**
+
+   ```bash
+   ./audit.sh [OPTIONS...]
+   ```
 
 The scripts will then process the log file(s) and generate the report, summary, and blacklist files in the designated output directory. The summary from `audit.sh` (when run directly or via `audits.sh`) will also be printed to the console if threats are found.
 
