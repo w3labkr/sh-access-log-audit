@@ -180,6 +180,7 @@ fi
 
 
 PATTERNS=(
+    # SQL Injection
     "SQL_INJECTION:.*' OR '1'='1"
     "SQL_INJECTION:.*(\b(UNION|SELECT)\b.{1,100}?\b(FROM|SLEEP|BENCHMARK|PG_SLEEP|WAITFOR)\b)"
     "SQL_INJECTION:.*(information_schema|pg_catalog|mysql\.user|sys\.tables|sysobjects)"
@@ -187,6 +188,8 @@ PATTERNS=(
     "SQL_INJECTION:.*(--|#|/\*|\*/|;).*(DROP|DELETE|INSERT|UPDATE|ALTER|CREATE)\b"
     "SQL_INJECTION:.*(xp_cmdshell|sp_configure|OPENROWSET|OPENDATASOURCE)"
     "SQL_INJECTION_NOSQL:.*([$]ne|[$]gt|[$]lt|[$]regex|[$]where)"
+
+    # Cross-Site Scripting (XSS)
     "XSS:.*<script\b[^>]*>.*?</script\b[^>]*>"
     "XSS:.*<img\b[^>]*\b(src|onerror|onload)\s*=\s*[^>]*javascript:[^>]+>"
     "XSS:.*<[a-zA-Z]+\b[^>]*\b(on\w+)\s*=\s*[^>]*[^'\"\s>]+"
@@ -195,46 +198,84 @@ PATTERNS=(
     "XSS:.*(expression\(|eval\(|setTimeout\(|setInterval\()"
     "XSS_ENCODED:.*(%3Cscript|%3Cimg|%3Csvg|%253Cscript|<script|<script)"
     "XSS_DOM:.*(#|location\.hash\s*=).*(<script>|javascript:)"
+
+    # Path Traversal & Local File Inclusion (LFI)
     "PATH_TRAVERSAL_LFI:.*(\.\.[/\\]|\.%2e%2e[%2f%5c]|\.%252e%252e[%252f%255c])"
     "PATH_TRAVERSAL_LFI:.*(etc/passwd|boot\.ini|win\.ini|system32/drivers/etc/hosts)"
     "PATH_TRAVERSAL_LFI:.*(WEB-INF/web\.xml|META-INF/MANIFEST\.MF)"
     "PATH_TRAVERSAL_LFI:.*(\%00|\0)"
+
+    # Remote File Inclusion (RFI)
     "RFI:.*(include|require|include_once|require_once)\s*[_A-Z0-9\[\]\"']*\s*=\s*(ht|f)tps?://[^&?\s]+"
-    "RFI:.*(include|require|include_once|require_once)\s*[_A-Z0_9\[\]\"']*\s*=\s*(php|data|expect)://[^&?\s]+"
+    "RFI:.*(include|require|include_once|require_once)\s*[_A-Z0-9\[\]\"']*\s*=\s*(php|data|expect)://[^&?\s]+"
+    
+    # Command Injection
     "CMD_INJECTION:.*(;|%3B|\n|%0A|\r|%0D|[\`]|[$]\(|\&\&|\|\|)"
     "CMD_INJECTION:.*(cmd=|exec=|command=|system=|passthru=|shell_exec=|popen=|pcntl_exec|eval\(|assert\()"
     "CMD_INJECTION:.*(cat\s+/etc/passwd|whoami|uname\s+-a|id|ls\s+-la|netstat|ifconfig|ipconfig|ping\s+-c\s+\d)"
     "CMD_INJECTION:.*(nc\s+-l\s+-p|ncat|powershell|bash\s+-c|perl\s+-e|python\s+-c|ruby\s+-e)"
+    
+    # Sensitive File Access
     "SENSITIVE_FILE_ACCESS:.*wp-config\.php"
     "SENSITIVE_FILE_ACCESS:.*(\.env|\.htpasswd|\.htaccess|\.git/config|config\.php|settings\.php|localsettings\.php|credentials|database\.yml|secrets\.yml)"
     "SENSITIVE_FILE_ACCESS:.*(\.pem|\.key|\.p12|\.crt|\.csr|\.jks)"
     "SENSITIVE_FILE_ACCESS:.*(phpinfo\.php|test\.php|info\.php|status\?full|server-status|manager/html)"
     "SENSITIVE_FILE_ACCESS:.*(web\.config|appsettings\.json)"
     "SENSITIVE_FILE_BACKUP:.*(\.(bak|backup|old|orig|sql|config|conf|zip|tar\.gz|tgz|swp|~|save|copy|dev|prod|staging|bkp|bk))([\?&]|$)"
+    
+    # Directory Listing
     "DIRECTORY_LISTING:.*(Index of /|parent directory)"
+
+    # Server-Side Request Forgery (SSRF)
     "SSRF:.*(127\.0\.0\.1|localhost|\[::1\]|0\.0\.0\.0)"
     "SSRF:.*(169\.254\.169\.254|metadata\.google\.internal|instance-data/latest/)"
     "SSRF:.*(url=|uri=|target=|dest=|file=|path=|host=|data=|feed=|image_url=).*(file:///|dict://|sftp://|ldap://|gopher://|jar://)"
     "SSRF:.*(url=|uri=|target=|dest=).*(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.)"
+    
+    # XML External Entity (XXE) Injection
     "XXE_INJECTION:.*(<!ENTITY\s+[^>]*\s+(SYSTEM|PUBLIC)\s+[\"'][^\"']*[\"']>)"
     "XXE_INJECTION:.*(<!ENTITY\s+%\s+[^>]*\s+SYSTEM)"
     "XXE_INJECTION:.*(xxe_payload|ENTITY\s+xxe)"
+    
+    # Log4Shell (JNDI Lookup)
     "LOG4J_JNDI_LOOKUP:.*\\$\{jndi:(ldap|ldaps|rmi|dns|iiop|corba|nis|nds):"
+    
+    # Spring4Shell (RCE)
     "SPRING4SHELL_RCE:.*class\.module\.classLoader"
+
+    # Insecure Deserialization
     "DESERIALIZATION_PHP_OBJECT:.*O:[0-9]+:\""
     "DESERIALIZATION_JAVA_OBJECT:.*( rO0ABXNy|aced0005|ysoserial| Javassist\.CtClass|weblogic\.jms\.common\.StreamMessageImpl)"
+    
+    # File Upload Vulnerabilities
     "FILE_UPLOAD_VULN:.*POST .*/(upload|files|uploads|tmp|temp|images)/.*\.(php[3457s]?|phtml|phar|aspx?|jspx?|sh|exe|dll|cgi|pl|py|rb|war|jar)(\.[^./]+)*"
     "FILE_UPLOAD_VULN:.*Content-Disposition:.*\bfilename\s*=\s*[\"'].*\.(php|jsp|asp|sh)[\"']"
+    
+    # Authentication Bypass
     "AUTH_BYPASS:.*(admin_bypass|is_admin=(true|1)|role=(admin|root)|user_level=0|debug_mode=1)"
     "AUTH_BYPASS:.*(X-Forwarded-For:\s*127\.0\.0\.1|X-Original-URL:|X-Rewrite-URL:|Authorization:\s*Basic\s*YWRtaW46YWRtaW4=)"
+    
+    # Vulnerable Component Access
     "VULN_COMPONENT_ACCESS:.*(/phpmyadmin/|/pma/|/wp-admin/|/admin/|/manager/html|/jmx-console/|/web-console/|struts/dojo/)"
+    
+    # Open Redirect
     "OPEN_REDIRECT:.*(redirect=|url=|next=|location=|goto=|target=|return=|return_to=|checkout_url=)(https?%3A%2F%2F|%2F%2F|\\\\|%5C%5C)[^/\\s?&][^\"'<>]+"
+    
+    # Information Disclosure / Debug
     "INFO_DISCLOSURE_DEBUG:.*(debug=(true|1)|TRACE\s+/|TRACK\s+/|X-Debug-Token:|phpinfo\(\))"
     "VERBOSE_ERROR_MESSAGES:.*(Stack Trace|Traceback \(most recent call last\)|PHP Fatal error:|Syntax error near|ORA-\d{5}:|java\.lang\.|Warning: Division by zero|Undefined index:)"
+    
+    # Log Injection / CRLF Injection
     "LOG_INJECTION:.*(%0d|%0a|\\r|\\n|\r\n)"
+    
+    # Server-Side Template Injection (SSTI)
     "SSTI:.*(\{\{.*\}\}|\{\%.*\%\}|<%=.*%>|[$]\{[^\}]+\}|#\{[^\}]+\})"
     "SSTI:.*(config.SECRET_KEY|settings.SECRET_KEY|getattribute|lipsum|self.__init__|class.__bases__|mro\(\))"
+    
+    # Prototype Pollution
     "PROTOTYPE_POLLUTION:.*(__proto__|constructor\.prototype|Object\.prototype).*\s*=\s*\{"
+    
+    # HTTP Desync / Request Smuggling
     "HTTP_DESYNC:.*(Content-Length:\s*\d+\r\nTransfer-Encoding:\s*chunked|Transfer-Encoding:\s*chunked\r\nContent-Length:\s*\d+)"
 )
 
