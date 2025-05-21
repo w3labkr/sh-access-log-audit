@@ -8,6 +8,7 @@ DEFAULT_TOP_N_DATE=10
 DEFAULT_TOP_N_IP=10
 DEFAULT_TOP_N_URL=10
 DEFAULT_TOP_N_REFERER=10
+DEFAULT_RUN_PATTERNS="" # New default: empty means run all patterns
 
 LOG_FILE="$DEFAULT_LOG_FILE"
 REPORT_FILE="$DEFAULT_REPORT_FILE"
@@ -17,6 +18,7 @@ TOP_N_DATE="$DEFAULT_TOP_N_DATE"
 TOP_N_IP="$DEFAULT_TOP_N_IP"
 TOP_N_URL="$DEFAULT_TOP_N_URL"
 TOP_N_REFERER="$DEFAULT_TOP_N_REFERER"
+RUN_ONLY_PATTERNS="$DEFAULT_RUN_PATTERNS" # Stores the comma-separated list from the option
 
 usage() {
     echo "Usage: $0 [OPTIONS...]"
@@ -29,6 +31,7 @@ usage() {
     echo "  --top-ip TOP_N_IP                  Number of IP address detection entries to display (default: $DEFAULT_TOP_N_IP)"
     echo "  --top-url TOP_N_URL                Number of URL detection entries to display (default: $DEFAULT_TOP_N_URL)"
     echo "  --top-referer TOP_N_REFERER        Number of Referer detection entries to display (default: $DEFAULT_TOP_N_REFERER)"
+    echo "  --run-patterns PATTERN_TYPES       Comma-separated list of pattern types to run (e.g., SQL_INJECTION,XSS). Runs all if not specified."
     echo "  --help, -h                           Display this help message."
     exit 1
 }
@@ -52,6 +55,8 @@ while [[ $# -gt 0 ]]; do
             if [[ -n "$2" && "$2" != -* ]]; then TOP_N_URL="$2"; shift 2; else echo "Error: --top-url option requires a numeric argument." >&2; usage; fi ;;
         --top-referer)
             if [[ -n "$2" && "$2" != -* ]]; then TOP_N_REFERER="$2"; shift 2; else echo "Error: --top-referer option requires a numeric argument." >&2; usage; fi ;;
+        --run-patterns)
+            if [[ -n "$2" && "$2" != -* ]]; then RUN_ONLY_PATTERNS="$2"; shift 2; else echo "Error: --run-patterns option requires a comma-separated list of pattern types argument." >&2; usage; fi ;;
         --help|-h)
             usage ;;
         *)
@@ -167,6 +172,62 @@ PATTERNS=(
     "HTTP_DESYNC:.*(Content-Length:\s*\d+\r\nTransfer-Encoding:\s*chunked|Transfer-Encoding:\s*chunked\r\nContent-Length:\s*\d+)"
 )
 
+# Filter PATTERNS array if --run-patterns is specified
+PATTERNS_TO_RUN=()
+if [ -n "$RUN_ONLY_PATTERNS" ]; then
+    IFS=',' read -ra SELECTED_PATTERNS_ARRAY <<< "$RUN_ONLY_PATTERNS"
+    
+    # 연관 배열 대신, 각 패턴 타입을 직접 비교
+    for pattern_item in "${PATTERNS[@]}"; do
+        IFS=":" read -r threat_type _ <<< "$pattern_item"
+        # 선택된 패턴 타입 목록(SELECTED_PATTERNS_ARRAY)에 현재 threat_type이 있는지 확인
+        should_add=false
+        for selected_type in "${SELECTED_PATTERNS_ARRAY[@]}"; do
+            trimmed_selected_type=$(echo "$selected_type" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//') # 공백 제거
+            if [[ "$threat_type" == "$trimmed_selected_type" ]]; then
+                should_add=true
+                break
+            fi
+        done
+
+        if [[ "$should_add" == true ]]; then
+            PATTERNS_TO_RUN+=("$pattern_item")
+        fi
+    done
+
+    if [ ${#PATTERNS_TO_RUN[@]} -eq 0 ]; then
+        echo "Error: No patterns matched the specified types: '$RUN_ONLY_PATTERNS'" >&2
+        echo "Please check the pattern types. Available types from the script are:" >&2
+        declare -A available_types_map # 임시로 여기서만 사용 (출력용) - 이 부분도 수정 필요하면 아래 참고
+        # 혹은 아래처럼 수정:
+        # local available_types_output="" 
+        # for pattern_item_temp in "${PATTERNS[@]}"; do
+        #     IFS=":" read -r threat_type_temp _ <<< "$pattern_item_temp"
+        #     if [[ -n "$threat_type_temp" && "$available_types_output" != *"$threat_type_temp"* ]]; then
+        #          available_types_output="$available_types_output $threat_type_temp"
+        #     fi
+        # done
+        # echo "  Available types:$available_types_output" >&2
+        # exit 1
+        # --- 아래는 기존 코드 (오류 출력용 연관 배열) ---
+        declare -A available_types_map # To list unique types from the main PATTERNS array
+        for pattern_item_map in "${PATTERNS[@]}"; do
+            IFS=":" read -r threat_type_map _ <<< "$pattern_item_map"
+            if [ -n "$threat_type_map" ] && [[ -z "${available_types_map[$threat_type_map]}" ]]; then
+                echo "  $threat_type_map" >&2
+                available_types_map["$threat_type_map"]=1
+            fi
+        done
+        unset available_types_map
+        exit 1
+        # --- 기존 코드 끝 ---
+    fi
+else
+    # If no specific patterns are requested, use all defined patterns
+    PATTERNS_TO_RUN=("${PATTERNS[@]}")
+fi
+
+
 IP_REGEX='^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}'
 DATE_REGEX='\[([0-9]{2}/[A-Za-z]{3}/[0-9]{4})'
 
@@ -251,6 +312,10 @@ echo "Number of Daily Detections to Display: $TOP_N_DATE" >> "$SUMMARY_FILE"
 echo "Number of IP Address Detections to Display: $TOP_N_IP" >> "$SUMMARY_FILE"
 echo "Number of URL Detections to Display: $TOP_N_URL" >> "$SUMMARY_FILE"
 echo "Number of Referer Detections to Display: $TOP_N_REFERER" >> "$SUMMARY_FILE"
+if [ -n "$RUN_ONLY_PATTERNS" ]; then
+    echo "Pattern Filtering Applied: Run only [$RUN_ONLY_PATTERNS]" >> "$SUMMARY_FILE"
+fi
+echo "Number of Web Vulnerability Check Patterns Used: ${#PATTERNS_TO_RUN[@]} (out of ${#PATTERNS[@]} total defined)" >> "$SUMMARY_FILE"
 echo "" >> "$SUMMARY_FILE"
 
 found_any_threat=false
@@ -267,7 +332,8 @@ top_referers_for_summary_raw=""
 
 unique_threat_types_in_order=()
 temp_seen_types_str=""
-for pattern_item in "${PATTERNS[@]}"; do
+# Use PATTERNS_TO_RUN to determine which threat types are active
+for pattern_item in "${PATTERNS_TO_RUN[@]}"; do
     IFS=":" read -r threat_type _ <<< "$pattern_item"
     if [ -z "$threat_type" ]; then continue; fi
     if ! echo "$temp_seen_types_str" | grep -q -w "$threat_type"; then
@@ -279,9 +345,10 @@ unset temp_seen_types_str
 
 TEMP_MATCHED_LOGS=$(mktemp)
 
+# Calculate threat_type_summary_data based on PATTERNS_TO_RUN
 for current_threat_type in "${unique_threat_types_in_order[@]}"; do
     type_specific_total_count=0
-    for pattern_item in "${PATTERNS[@]}"; do
+    for pattern_item in "${PATTERNS_TO_RUN[@]}"; do
         IFS=":" read -r threat_type_from_pattern pattern <<< "$pattern_item"
         if [[ "$threat_type_from_pattern" == "$current_threat_type" ]]; then
             current_pattern_detection_count=$(grep -E -i -c "$pattern" "$LOG_FILE")
@@ -294,15 +361,18 @@ for current_threat_type in "${unique_threat_types_in_order[@]}"; do
     fi
 done
 
+# Populate TEMP_MATCHED_LOGS using PATTERNS_TO_RUN
 if [ "$found_any_threat" = true ]; then
-    for pattern_item in "${PATTERNS[@]}"; do
+    for pattern_item in "${PATTERNS_TO_RUN[@]}"; do
         IFS=":" read -r _ pattern <<< "$pattern_item"
          if [ -z "$pattern" ]; then continue; fi
         grep -E -i "$pattern" "$LOG_FILE" >> "$TEMP_MATCHED_LOGS"
     done
 fi
 
-for pattern_item in "${PATTERNS[@]}"; do
+# Recalculate total_log_lines_matched_overall based on PATTERNS_TO_RUN
+total_log_lines_matched_overall=0 
+for pattern_item in "${PATTERNS_TO_RUN[@]}"; do
     IFS=":" read -r _ pattern <<< "$pattern_item"
     if [ -z "$pattern" ]; then continue; fi
     count_for_this_pattern=$(grep -E -i -c "$pattern" "$LOG_FILE")
@@ -360,6 +430,7 @@ if [ -f "$TEMP_MATCHED_LOGS" ] && [ -s "$TEMP_MATCHED_LOGS" ]; then
 fi
 
 if [ "$found_any_threat" = true ]; then
+    # Iterate over unique threat types found (derived from PATTERNS_TO_RUN)
     for current_threat_type_code in "${unique_threat_types_in_order[@]}"; do
         type_total_detections_str=$(echo "$threat_type_summary_data" | grep -o -E "${current_threat_type_code}=[^;]+" | cut -d'=' -f2)
         type_total_detections=${type_total_detections_str:-0}
@@ -370,7 +441,8 @@ if [ "$found_any_threat" = true ]; then
             echo "Threat Type: $threat_name_for_report (Code: $current_threat_type_code, Total Detected Log Lines: $type_total_detections)" >> "$REPORT_FILE"
             echo "Description: $(echo "$threat_desc_full" | cut -d':' -f2-)" >> "$REPORT_FILE"
             echo "Detected Logs:" >> "$REPORT_FILE"
-            for pattern_item_inner in "${PATTERNS[@]}"; do
+            # List logs for this specific threat type using patterns from PATTERNS_TO_RUN
+            for pattern_item_inner in "${PATTERNS_TO_RUN[@]}"; do
                 IFS=":" read -r inner_threat_type inner_pattern <<< "$pattern_item_inner"
                 if [[ "$inner_threat_type" == "$current_threat_type_code" ]]; then
                     grep_output=$(grep -E -i "$inner_pattern" "$LOG_FILE")
@@ -386,7 +458,7 @@ echo "========================================" >> "$REPORT_FILE"
 
 if [ "$found_any_threat" = true ]; then
     echo "===== Audit Summary =====" >> "$SUMMARY_FILE"
-    echo "Total Matched Log Lines (all patterns, duplicates possible): $total_log_lines_matched_overall" >> "$SUMMARY_FILE"
+    echo "Total Matched Log Lines (for selected patterns, duplicates possible): $total_log_lines_matched_overall" >> "$SUMMARY_FILE"
     echo "" >> "$SUMMARY_FILE"
 
     echo "--- Web Vulnerability Check Results (Detections by Threat Type) ---" >> "$SUMMARY_FILE"
@@ -439,6 +511,7 @@ if [ "$found_any_threat" = true ]; then
                     fi
                     printf "  - %s : %s events\n" "$display_url" "$count" >> "$SUMMARY_FILE"
                 else
+                    # Fallback to display encoded_url if base64 decoding fails or result is empty
                     if [ ${#encoded_url} -gt 70 ]; then
                         display_url="${encoded_url:0:67}..."
                     else
@@ -465,6 +538,7 @@ if [ "$found_any_threat" = true ]; then
                     fi
                     printf "  - %s : %s events\n" "$display_referer" "$count" >> "$SUMMARY_FILE"
                 else
+                    # Fallback for referer
                     if [ ${#encoded_referer} -gt 70 ]; then
                         display_referer="${encoded_referer:0:67}..."
                     else
@@ -480,7 +554,7 @@ if [ "$found_any_threat" = true ]; then
     echo "=========================" >> "$SUMMARY_FILE"
     echo "For detailed logs, check the $REPORT_FILE file." >> "$SUMMARY_FILE"
 else
-    echo "No security threat logs detected." >> "$SUMMARY_FILE"
+    echo "No security threat logs detected for the specified patterns." >> "$SUMMARY_FILE"
     echo "=========================" >> "$SUMMARY_FILE"
 fi
 
@@ -490,12 +564,12 @@ if [ "$found_any_threat" = true ] && [ -f "$TEMP_MATCHED_LOGS" ] && [ -s "$TEMP_
     echo "IP blacklist created: $BLACKLIST_FILE"
 else
     > "$BLACKLIST_FILE" 
-    echo "No threats detected, empty IP blacklist file created: $BLACKLIST_FILE"
+    echo "No threats detected (or no logs matched selected patterns), empty IP blacklist file created: $BLACKLIST_FILE"
 fi
 
 
 if [ "$found_any_threat" = false ]; then
-    echo "No security threat logs detected."
+    echo "No security threat logs detected for the specified patterns."
     echo "Report generation complete: $REPORT_FILE, $SUMMARY_FILE, $BLACKLIST_FILE"
 else
     echo "Report generation complete: $REPORT_FILE, $SUMMARY_FILE, $BLACKLIST_FILE"
