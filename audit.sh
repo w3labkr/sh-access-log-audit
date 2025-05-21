@@ -4,6 +4,7 @@ DEFAULT_LOG_FILE="access.log"
 DEFAULT_REPORT_FILE="report.txt"
 DEFAULT_SUMMARY_FILE="summary.txt"
 DEFAULT_BLACKLIST_FILE="blacklist.txt"
+DEFAULT_OUTPUT_DIR="output"
 DEFAULT_TOP_N_DATE=10
 DEFAULT_TOP_N_IP=10
 DEFAULT_TOP_N_URL=10
@@ -14,6 +15,7 @@ LOG_FILE="$DEFAULT_LOG_FILE"
 REPORT_FILE="$DEFAULT_REPORT_FILE"
 SUMMARY_FILE="$DEFAULT_SUMMARY_FILE"
 BLACKLIST_FILE="$DEFAULT_BLACKLIST_FILE"
+OUTPUT_DIR="$DEFAULT_OUTPUT_DIR"
 TOP_N_DATE="$DEFAULT_TOP_N_DATE"
 TOP_N_IP="$DEFAULT_TOP_N_IP"
 TOP_N_URL="$DEFAULT_TOP_N_URL"
@@ -24,6 +26,7 @@ usage() {
     echo "Usage: $0 [OPTIONS...]"
     echo "Options:"
     echo "  --file LOG_FILE, -f LOG_FILE         Path to the log file to analyze (default: $DEFAULT_LOG_FILE)"
+    echo "  --output OUTPUT_DIR, -o OUTPUT_DIR   Directory to save report files (default: $DEFAULT_OUTPUT_DIR)"
     echo "  --report-file REPORT_FILE            Detailed report file name (default: $DEFAULT_REPORT_FILE)"
     echo "  --summary-file SUMMARY_FILE          Summary report file name (default: $DEFAULT_SUMMARY_FILE)"
     echo "  --blacklist-file BLACKLIST_FILE      IP blacklist file name (default: $DEFAULT_BLACKLIST_FILE)"
@@ -40,8 +43,6 @@ usage() {
     exit 1
 }
 
-# 패턴 그룹 정의 (Bash 3.x 호환 방식)
-# 각 그룹을 별도의 변수로 정의하고, 그룹명 목록을 관리
 GROUP_SQL_INJECTION="SQL_INJECTION,SQL_INJECTION_NOSQL"
 GROUP_XSS="XSS,XSS_ENCODED,XSS_DOM"
 GROUP_SENSITIVE_FILE="SENSITIVE_FILE_ACCESS,SENSITIVE_FILE_BACKUP"
@@ -91,8 +92,10 @@ only_patterns_option_provided=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --file|-f)
+        -f|--file)
             if [[ -n "$2" && "$2" != -* ]]; then LOG_FILE="$2"; shift 2; else echo "Error: --file or -f option requires a file path argument." >&2; usage; fi ;;
+        -o|--output)
+            if [[ -n "$2" && "$2" != -* ]]; then OUTPUT_DIR="$2"; shift 2; else echo "Error: --output or -o option requires a directory argument." >&2; usage; fi ;;
         --report-file)
             if [[ -n "$2" && "$2" != -* ]]; then REPORT_FILE="$2"; shift 2; else echo "Error: --report-file option requires a file name argument." >&2; usage; fi ;;
         --summary-file)
@@ -131,6 +134,50 @@ if [ ${#ARGS[@]} -ne 0 ]; then
     echo "Unknown argument or incorrect option usage: ${ARGS[*]}"
     usage
 fi
+
+
+if [ ! -d "$OUTPUT_DIR" ]; then
+    mkdir -p "$OUTPUT_DIR"
+    if [ $? -ne 0 ]; then
+        echo "Error: Could not create output directory '$OUTPUT_DIR'." >&2
+        exit 1
+    fi
+    echo "INFO: Created output directory '$OUTPUT_DIR'."
+fi
+
+
+if [[ "$REPORT_FILE" != */* ]]; then
+    REPORT_FILE="${OUTPUT_DIR}/${REPORT_FILE}"
+fi
+
+mkdir -p "$(dirname "$REPORT_FILE")"
+if [ $? -ne 0 ]; then
+    echo "Error: Could not create directory for report file: $(dirname "$REPORT_FILE")" >&2
+    exit 1
+fi
+
+
+if [[ "$SUMMARY_FILE" != */* ]]; then
+    SUMMARY_FILE="${OUTPUT_DIR}/${SUMMARY_FILE}"
+fi
+
+mkdir -p "$(dirname "$SUMMARY_FILE")"
+if [ $? -ne 0 ]; then
+    echo "Error: Could not create directory for summary file: $(dirname "$SUMMARY_FILE")" >&2
+    exit 1
+fi
+
+
+if [[ "$BLACKLIST_FILE" != */* ]]; then
+    BLACKLIST_FILE="${OUTPUT_DIR}/${BLACKLIST_FILE}"
+fi
+
+mkdir -p "$(dirname "$BLACKLIST_FILE")"
+if [ $? -ne 0 ]; then
+    echo "Error: Could not create directory for blacklist file: $(dirname "$BLACKLIST_FILE")" >&2
+    exit 1
+fi
+
 
 PATTERNS=(
     "SQL_INJECTION:.*' OR '1'='1"
@@ -253,8 +300,52 @@ elif [ -n "$ONLY_PATTERNS_SPECIFIED" ]; then
         exit 1
     fi
 else
-    echo "INFO: No specific patterns provided and default did not apply as expected. Running with ALL patterns as a fallback."
-    PATTERNS_TO_RUN=("${PATTERNS[@]}")
+    if [[ -z "$ONLY_PATTERNS_SPECIFIED" || "$ONLY_PATTERNS_SPECIFIED" == "ALL" ]]; then
+        PATTERNS_TO_RUN=("${PATTERNS[@]}")
+        echo "INFO: Running with ALL patterns (default or specified as ALL/empty)."
+    else
+        IFS=',' read -ra initial_selected_items <<< "$ONLY_PATTERNS_SPECIFIED"
+        temp_final_types_str=" "
+        for item in "${initial_selected_items[@]}"; do
+            trimmed_item=$(echo "$item" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+            group_members_str=$(get_group_members "$trimmed_item")
+
+            if [ -n "$group_members_str" ]; then
+                IFS=',' read -ra group_members_array <<< "$group_members_str"
+                for member in "${group_members_array[@]}"; do
+                    trimmed_member=$(echo "$member" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+                    if ! echo "$temp_final_types_str" | grep -q " $trimmed_member "; then
+                        final_selected_types_for_filtering+=("$trimmed_member")
+                        temp_final_types_str="$temp_final_types_str$trimmed_member "
+                    fi
+                done
+            else
+                if ! echo "$temp_final_types_str" | grep -q " $trimmed_item "; then
+                     final_selected_types_for_filtering+=("$trimmed_item")
+                     temp_final_types_str="$temp_final_types_str$trimmed_item "
+                fi
+            fi
+        done
+
+        for pattern_item in "${PATTERNS[@]}"; do
+            IFS=":" read -r threat_type _ <<< "$pattern_item"
+            should_add=false
+            for selected_type_final in "${final_selected_types_for_filtering[@]}"; do
+                if [[ "$threat_type" == "$selected_type_final" ]]; then
+                    should_add=true
+                    break
+                fi
+            done
+            if [[ "$should_add" == true ]]; then
+                PATTERNS_TO_RUN+=("$pattern_item")
+            fi
+        done
+        echo "INFO: Running with default patterns: $DEFAULT_ONLY_PATTERNS"
+        if [ ${#PATTERNS_TO_RUN[@]} -eq 0 ]; then
+             echo "Error: Default patterns '$DEFAULT_ONLY_PATTERNS' resulted in no active patterns. Check definitions." >&2
+             exit 1
+        fi
+    fi
 fi
 
 IP_REGEX='^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}'
@@ -331,12 +422,14 @@ echo "Security Audit Report (Detailed Logs) - $(date)" > "$REPORT_FILE"
 echo "========================================" >> "$REPORT_FILE"
 echo "" >> "$REPORT_FILE"
 echo "Log File Analyzed: $LOG_FILE" >> "$REPORT_FILE"
+echo "Output Directory: $OUTPUT_DIR" >> "$REPORT_FILE"
 echo "" >> "$REPORT_FILE"
 
 echo "Security Audit Summary - $(date)" > "$SUMMARY_FILE"
 echo "========================================" >> "$SUMMARY_FILE"
 echo "" >> "$SUMMARY_FILE"
 echo "Log File Analyzed: $LOG_FILE" >> "$SUMMARY_FILE"
+echo "Output Directory: $OUTPUT_DIR" >> "$SUMMARY_FILE"
 echo "Number of Daily Detections to Display: $TOP_N_DATE" >> "$SUMMARY_FILE"
 echo "Number of IP Address Detections to Display: $TOP_N_IP" >> "$SUMMARY_FILE"
 echo "Number of URL Detections to Display: $TOP_N_URL" >> "$SUMMARY_FILE"
@@ -345,7 +438,7 @@ echo "Number of Referer Detections to Display: $TOP_N_REFERER" >> "$SUMMARY_FILE
 if [[ "$only_patterns_option_provided" == true && ( -z "$ONLY_PATTERNS_SPECIFIED" || "$ONLY_PATTERNS_SPECIFIED" == "ALL" ) ]]; then
     echo "Patterns Executed: ALL patterns" >> "$SUMMARY_FILE"
 elif [ -n "$ONLY_PATTERNS_SPECIFIED" ]; then
-    echo "Patterns Executed (User Input): [$ONLY_PATTERNS_SPECIFIED]" >> "$SUMMARY_FILE"
+    echo "Patterns Executed (User Input or Default): [$ONLY_PATTERNS_SPECIFIED]" >> "$SUMMARY_FILE"
 fi
 echo "Number of Web Vulnerability Check Patterns Used: ${#PATTERNS_TO_RUN[@]} (out of ${#PATTERNS[@]} total defined)" >> "$SUMMARY_FILE"
 echo "" >> "$SUMMARY_FILE"
@@ -586,7 +679,7 @@ fi
 
 
 if [ "$found_any_threat" = true ] && [ -f "$TEMP_MATCHED_LOGS" ] && [ -s "$TEMP_MATCHED_LOGS" ]; then
-    grep -o -E "$IP_REGEX" "$TEMP_MATCHED_LOGS" | sort -u | awk '{print "- " $0}' > "$BLACKLIST_FILE"
+    grep -o -E "$IP_REGEX" "$TEMP_MATCHED_LOGS" | sort -u > "$BLACKLIST_FILE"
     echo "IP blacklist created: $BLACKLIST_FILE"
 else
     > "$BLACKLIST_FILE"
@@ -596,11 +689,15 @@ fi
 
 if [ "$found_any_threat" = false ]; then
     echo "No security threat logs detected for the specified patterns."
-    echo "Report generation complete: $REPORT_FILE, $SUMMARY_FILE, $BLACKLIST_FILE"
+    echo "Report generation complete. Files saved in '$OUTPUT_DIR':"
+    echo "  Report: $REPORT_FILE"
+    echo "  Summary: $SUMMARY_FILE"
+    echo "  Blacklist: $BLACKLIST_FILE"
 else
-    echo "Report generation complete: $REPORT_FILE, $SUMMARY_FILE, $BLACKLIST_FILE"
-    echo ""
-    cat "$SUMMARY_FILE"
+    echo "Report generation complete. Files saved in '$OUTPUT_DIR':"
+    echo "  Report: $REPORT_FILE"
+    echo "  Summary: $SUMMARY_FILE"
+    echo "  Blacklist: $BLACKLIST_FILE"
 fi
 
 if [ -f "$TEMP_MATCHED_LOGS" ]; then
