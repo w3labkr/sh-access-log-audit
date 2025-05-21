@@ -1,19 +1,23 @@
 #!/bin/bash
 
+# Path to the main audit script.
 AUDIT_SCRIPT_PATH="./audit.sh"
 LOG_DIR="./"
 LOG_FILE_PATTERN="access-*.log"
 LOG_FILE_DEFAULT="access.log"
 SPECIFIC_LOG_FILE=""
 
+# Pattern groups for audit.sh; comma-separated. Default: SQL_INJECTION_GROUP,XSS_GROUP
 ONLY_PATTERNS_TO_RUN_DEFAULT="SQL_INJECTION_GROUP,XSS_GROUP"
 ONLY_PATTERNS_TO_RUN="$ONLY_PATTERNS_TO_RUN_DEFAULT"
 REPORTS_BASE_DIR="output"
 
+# Process command-line arguments.
 while [[ $# -gt 0 ]]; do
     key="$1"
     case $key in
         -f|--file)
+        # Specify a single log file to analyze.
         if [[ -n "$2" && "$2" != -* ]]; then
             SPECIFIC_LOG_FILE="$2"; shift 2
         else
@@ -21,6 +25,7 @@ while [[ $# -gt 0 ]]; do
         fi
         ;;
         -o|--output)
+        # Specify the output directory for reports.
         if [[ -n "$2" && "$2" != -* ]]; then
             REPORTS_BASE_DIR="$2"; shift 2
         else
@@ -28,6 +33,8 @@ while [[ $# -gt 0 ]]; do
         fi
         ;;
         --only-patterns)
+        # Specify which pattern groups to run in audit.sh.
+        # An empty value allows audit.sh to use its own defaults.
         if [[ -n "$2" && "$2" != -* ]]; then
             ONLY_PATTERNS_TO_RUN="$2"; shift 2
         elif [[ "$2" == "" || ($# -eq 1 && "$2" != -*) ]]; then
@@ -66,6 +73,7 @@ if [ -n "$SPECIFIC_LOG_FILE" ]; then
     log_files_to_process+=("$SPECIFIC_LOG_FILE")
 else
     if [ -d "$LOG_DIR" ] && [ -n "$LOG_FILE_PATTERN" ]; then
+        # Find files in LOG_DIR (non-recursive) matching LOG_FILE_PATTERN.
         while IFS= read -r found_file; do
             [ -n "$found_file" ] && log_files_to_process+=("$found_file")
         done < <(find "$LOG_DIR" -maxdepth 1 -type f -name "$LOG_FILE_PATTERN" 2>/dev/null)
@@ -80,7 +88,7 @@ else
             log_files_to_process+=("$default_log_file_path")
         else
             msg="Error: Could not find any log files to analyze. "
-            if [ -n "$SPECIFIC_LOG_FILE" ]; then # This branch should not be hit due to earlier check, but for robustness
+            if [ -n "$SPECIFIC_LOG_FILE" ]; then
                 msg+="Problem with the file specified by the '--file' (or '-f') option."
             elif [ ${#log_files_to_process[@]} -eq 0 ] && [ -z "$default_log_file_path" ]; then
                 msg+="No files matched the pattern ('$LOG_FILE_PATTERN'), and the default file ('$LOG_FILE_DEFAULT') was not found in '$LOG_DIR' or the current directory."
@@ -107,6 +115,7 @@ for log_file_path_loop_var in "${log_files_to_process[@]}"; do
     if [ -z "$log_file_name" ]; then continue; fi
 
     file_identifier_suffix=""
+    # If processing multiple files via wildcard, extract the variable part of the filename for unique report names.
     if [ -z "$SPECIFIC_LOG_FILE" ] && [[ "$LOG_FILE_PATTERN" == *"*"* ]]; then
         if [[ "$log_file_name" == $LOG_FILE_PATTERN ]]; then
             pattern_prefix="${LOG_FILE_PATTERN%%\**}"
@@ -129,6 +138,7 @@ for log_file_path_loop_var in "${log_files_to_process[@]}"; do
     summary_file_for_audit="$REPORTS_BASE_DIR/$summary_filename"
     blacklist_file_for_audit="$REPORTS_BASE_DIR/$blacklist_filename"
     
+    # Ensure log file path passed to audit.sh is absolute.
     log_file_abs_path="$log_file_path_loop_var"
     if [[ "$log_file_path_loop_var" != /* ]]; then
          if [[ "$log_file_path_loop_var" == "./"* ]]; then
@@ -149,24 +159,30 @@ for log_file_path_loop_var in "${log_files_to_process[@]}"; do
         audit_sh_options="$audit_sh_options --only-patterns \"$ONLY_PATTERNS_TO_RUN\""
     fi
 
+    # Progress Bar
     percentage=$((current_file_num * 100 / total_files))
     bar_length=30
     filled_length=$((percentage * bar_length / 100))
     bar=$(printf "%${filled_length}s" "" | tr ' ' '❚')
     empty_bar=$(printf "%$((bar_length - filled_length))s" "")
     
+    # \r moves cursor to line start, \033[K clears line from cursor.
     printf "\r\033[KAnalyzing: [%s%s] %3d%% (%d/%d) - %s" "$bar" "$empty_bar" "$percentage" "$current_file_num" "$total_files" "$log_file_name"
 
+    # `eval` is used for correct interpretation of quotes in $audit_sh_options.
+    # audit.sh output is suppressed.
     eval "$AUDIT_SCRIPT_PATH $audit_sh_options" > /dev/null 2>&1
     
 done
 
+# Clear the progress bar line after completion.
 if [ "$total_files" -gt 0 ]; then
     printf "\r\033[K"
 fi
 echo "All log files analyzed. ($current_file_num files processed)"
 echo "Reports have been saved to the '$REPORTS_BASE_DIR' directory."
 
+# Warn about potential report overwriting if multiple files were processed without filename identifiers.
 if [ -z "$SPECIFIC_LOG_FILE" ] && [ ${#log_files_to_process[@]} -gt 1 ] && [ -z "$file_identifier_suffix" ]; then
     echo "Warning: Multiple log files were processed without using an identifier in the report filenames. Report files may have been overwritten by the results from the last log file."
 elif [ -z "$SPECIFIC_LOG_FILE" ] && [ ${#log_files_to_process[@]} -eq 1 ] && [ -z "$file_identifier_suffix" ] && [[ "$log_file_name" == "$LOG_FILE_DEFAULT" ]]; then
